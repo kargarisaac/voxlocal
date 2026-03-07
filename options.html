@@ -1,0 +1,260 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Voxlocal - Settings</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      padding: 40px;
+      max-width: 600px;
+      margin: 0 auto;
+    }
+    h1 {
+      font-size: 22px;
+      margin-bottom: 8px;
+      color: #e94560;
+    }
+    .subtitle {
+      font-size: 13px;
+      color: #888;
+      margin-bottom: 30px;
+    }
+    .section {
+      background: #16213e;
+      border-radius: 10px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+    .section h2 {
+      font-size: 15px;
+      margin-bottom: 16px;
+      color: #ccc;
+      border-bottom: 1px solid #0f3460;
+      padding-bottom: 8px;
+    }
+    .field {
+      margin-bottom: 16px;
+    }
+    .field:last-child { margin-bottom: 0; }
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 6px;
+      color: #ddd;
+    }
+    .field .hint {
+      font-size: 11px;
+      color: #777;
+      margin-top: 4px;
+    }
+    select, input[type="text"], input[type="number"] {
+      width: 100%;
+      padding: 8px 10px;
+      border-radius: 6px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      font-size: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    select:focus, input:focus { border-color: #e94560; }
+    .toggle-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 6px 0;
+    }
+    .toggle-row .label {
+      font-size: 13px;
+    }
+    .toggle-row .label .hint {
+      font-size: 11px;
+      color: #777;
+      display: block;
+      margin-top: 2px;
+    }
+    /* Toggle switch */
+    .switch {
+      position: relative;
+      width: 44px;
+      height: 24px;
+      flex-shrink: 0;
+    }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .slider {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: #0f3460;
+      border-radius: 12px;
+      cursor: pointer;
+      transition: background 0.3s;
+    }
+    .slider::before {
+      content: '';
+      position: absolute;
+      height: 18px; width: 18px;
+      left: 3px; bottom: 3px;
+      background: #e6e6e6;
+      border-radius: 50%;
+      transition: transform 0.3s;
+    }
+    .switch input:checked + .slider { background: #e94560; }
+    .switch input:checked + .slider::before { transform: translateX(20px); }
+
+    .slider-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .slider-row input[type="range"] {
+      flex: 1;
+      height: 4px;
+      -webkit-appearance: none;
+      background: #0f3460;
+      border-radius: 2px;
+      outline: none;
+    }
+    .slider-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 16px; height: 16px;
+      border-radius: 50%;
+      background: #e94560;
+      cursor: pointer;
+    }
+    .slider-val {
+      min-width: 40px;
+      text-align: right;
+      font-size: 14px;
+      font-weight: 600;
+      color: #e94560;
+    }
+
+    .save-bar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    .btn-save {
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 6px;
+      padding: 10px 24px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-save:hover { background: #d03050; }
+    .save-msg {
+      font-size: 13px;
+      color: #2ecc71;
+      opacity: 0;
+      transition: opacity 0.3s;
+    }
+    .save-msg.visible { opacity: 1; }
+  </style>
+</head>
+<body>
+  <h1>Voxlocal</h1>
+  <p class="subtitle">Configure your local text-to-speech reading setup.</p>
+
+  <!-- Backend -->
+  <div class="section">
+    <h2>TTS Backend</h2>
+    <div class="field">
+      <label for="backend">Backend</label>
+      <select id="backend">
+        <option value="kokoro">Kokoro TTS (port 8880)</option>
+        <option value="kittentts">KittenTTS (port 8881)</option>
+      </select>
+      <div class="hint">Select which local TTS server to use.</div>
+    </div>
+    <div class="field">
+      <label for="serverUrl">Server URL</label>
+      <input type="text" id="serverUrl">
+      <div class="hint">The full URL for the TTS speech endpoint. Auto-set when you change backend.</div>
+    </div>
+  </div>
+
+  <!-- Voice & Speed -->
+  <div class="section">
+    <h2>Voice & Speed</h2>
+    <div class="field">
+      <label for="defaultVoice">Default Voice</label>
+      <input type="text" id="defaultVoice" placeholder="e.g., af_heart">
+      <div class="hint">Type a voice name. Available voices depend on your backend.</div>
+    </div>
+    <div class="field">
+      <label>Default Speed</label>
+      <div class="slider-row">
+        <input type="range" id="defaultSpeed" min="0.5" max="3.0" step="0.1" value="1.0">
+        <span class="slider-val" id="defaultSpeedVal">1.0x</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Behavior -->
+  <div class="section">
+    <h2>Behavior</h2>
+    <div class="field">
+      <div class="toggle-row">
+        <div class="label">
+          Auto Reader Mode
+          <span class="hint">Use Readability to extract article content. Strips navbars, ads, footers.</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="autoReaderMode" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <div class="toggle-row">
+        <div class="label">
+          Pre-process Text
+          <span class="hint">Clean up markdown, URLs, and symbols before sending to TTS.</span>
+        </div>
+        <label class="switch">
+          <input type="checkbox" id="preprocessText" checked>
+          <span class="slider"></span>
+        </label>
+      </div>
+    </div>
+    <div class="field">
+      <label>Max Chunk Size</label>
+      <div class="slider-row">
+        <input type="range" id="maxChunkSize" min="200" max="1000" step="50" value="500">
+        <span class="slider-val" id="maxChunkSizeVal">500</span>
+      </div>
+      <div class="hint">Characters per TTS request. Smaller = faster start, more requests.</div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts -->
+  <div class="section">
+    <h2>Keyboard Shortcuts</h2>
+    <div class="field">
+      <div class="hint" style="margin-top: 0;">
+        <strong>Alt+Shift+R</strong> - Read selected text or page<br>
+        <strong>Alt+Shift+S</strong> - Stop reading<br><br>
+        To change shortcuts, visit <code>chrome://extensions/shortcuts</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- Save -->
+  <div class="save-bar">
+    <button class="btn-save" id="saveBtn">Save Settings</button>
+    <span class="save-msg" id="saveMsg">Settings saved!</span>
+  </div>
+
+  <script src="constants.js"></script>
+  <script src="options.js"></script>
+</body>
+</html>
