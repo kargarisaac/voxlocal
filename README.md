@@ -47,38 +47,36 @@ Browser read-aloud tools either send your content to external servers or sound r
 ### Architecture
 
 ```mermaid
-stateDiagram-v2
-    direction TB
-
-    state "Chrome Extension (MV3)" as ext {
+flowchart TB
+    subgraph ext["Chrome Extension - MV3"]
         direction LR
-        sidepanel: sidepanel.html/js\nTTS Controls + Chat UI
-        background: background.js\nService Worker
-        content: content.js\nText Extraction
-        offscreen: offscreen.js\nAudio Playback + PDF.js
+        sidepanel["sidepanel.html/js<br/>TTS Controls + Chat UI"]
+        background["background.js<br/>Service Worker"]
+        content["content.js<br/>Text Extraction"]
+        offscreen["offscreen.js<br/>Audio Playback + PDF.js"]
 
-        sidepanel --> background: commands
-        background --> offscreen: audio chunks
-        content --> background: extracted text
-    }
+        sidepanel -- commands --> background
+        content -- extracted text --> background
+        background -- audio chunks --> offscreen
+    end
 
-    state "TTS Servers (Docker)" as tts {
+    subgraph tts["TTS Servers - Docker"]
         direction LR
-        kokoro: Kokoro‑FastAPI\nlocalhost:8880
-        kitten: KittenTTS\nlocalhost:8881
-    }
+        kokoro["Kokoro-FastAPI<br/>localhost:8880"]
+        kitten["KittenTTS<br/>localhost:8881"]
+    end
 
-    state "Chat Server (Docker)" as chat {
-        chatserver: FastAPI + httpx\nlocalhost:8882
-    }
+    subgraph chat["Chat Server - Docker"]
+        chatserver["FastAPI + httpx<br/>localhost:8882"]
+    end
 
-    state "LLM Runtime (Host)" as llm {
-        ollama: Ollama\nlocalhost:11434
-    }
+    subgraph llm["LLM Runtime - Host"]
+        ollama["Ollama<br/>localhost:11434"]
+    end
 
-    background --> tts: POST /v1/audio/speech
-    background --> chatserver: POST /sessions, /chat (SSE)
-    chatserver --> ollama: POST /api/chat (streaming)
+    background -- "POST /v1/audio/speech" --> tts
+    background -- "POST /sessions, /chat (SSE)" --> chatserver
+    chatserver -- "POST /api/chat (streaming)" --> ollama
 ```
 
 ### Extension (Chrome MV3, vanilla JS)
