@@ -1,14 +1,15 @@
 {
   "manifest_version": 3,
   "name": "Voxlocal",
-  "version": "1.0.0",
-  "description": "Read web pages, PDFs, and tweets aloud using locally running TTS servers. No cloud APIs, fully private.",
+  "version": "1.1.0",
+  "description": "Read web pages, PDFs, and tweets aloud using locally running TTS servers. Chat with page content via local LLM.",
   "permissions": [
     "activeTab",
     "contextMenus",
     "storage",
     "offscreen",
-    "scripting"
+    "scripting",
+    "sidePanel"
   ],
   "host_permissions": [
     "http://localhost:*/*",
@@ -16,12 +17,12 @@
     "https://*/*"
   ],
   "action": {
-    "default_popup": "popup.html",
     "default_icon": {
       "16": "icons/icon16.png",
       "48": "icons/icon48.png",
       "128": "icons/icon128.png"
-    }
+    },
+    "default_title": "Voxlocal"
   },
   "icons": {
     "16": "icons/icon16.png",
@@ -30,6 +31,9 @@
   },
   "background": {
     "service_worker": "background.js"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
   },
   "content_scripts": [
     {

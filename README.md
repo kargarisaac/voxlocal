@@ -1,179 +1,206 @@
 # Voxlocal
 
-A Chrome extension that reads web pages, PDFs, and tweets aloud using locally running TTS servers. No cloud APIs, no data leaves your machine.
+A Chrome extension that reads web pages, PDFs, and tweets aloud using locally running TTS servers, and lets you chat about page content with a local LLM. No cloud APIs, no data leaves your machine.
 
 ## Why
 
-Browser-based read-aloud tools either send your content to external servers or sound robotic. Voxlocal gives you natural-sounding speech from modern open-source TTS models running entirely on your own hardware. It works with articles, academic papers, Twitter/X threads, and any selected text.
+Browser-based read-aloud tools either send your content to external servers or sound robotic. AI assistants require cloud subscriptions. Voxlocal gives you both — natural-sounding speech from modern open-source TTS models and a conversational AI agent for page content — running entirely on your own hardware.
 
 ## What it does
 
-- **Articles** -- extracts clean article text from any webpage using Mozilla Readability, stripping ads, navbars, and sidebars
-- **PDFs** -- extracts text from PDFs opened in Chrome (including arxiv papers) with page range selection
-- **X/Twitter** -- detects tweet pages and reads post content
-- **Selected text** -- highlight anything and read it aloud via right-click or keyboard shortcut
-- **Two TTS backends** -- Kokoro-FastAPI (50+ voices, multi-language) or KittenTTS (lightweight, English, 8 voices)
-- **Gapless playback** -- text is split into sentence-level chunks with the next chunk pre-fetched while the current one plays
-- **Floating widget** -- a small on-page control appears during playback with play/pause/stop/skip
-- **Keyboard shortcuts** -- `Alt+Shift+R` to read, `Alt+Shift+S` to stop
-- **Fully offline** -- everything runs locally via Docker
+- **Read aloud** -- articles, PDFs (including arxiv), tweets, and selected text
+- **Chat with pages** -- ask questions, request summaries, discuss content with a local LLM
+- **Side panel UI** -- TTS controls and chat live together in Chrome's side panel
+- **Two TTS backends** -- Kokoro-FastAPI (50+ voices, multi-language) or KittenTTS (lightweight, English)
+- **Local LLM** -- Ollama with any model (default: qwen3.5:35b)
+- **Gapless playback** -- sentence-level chunks with pre-fetching for smooth audio
+- **Read AI responses** -- click the speaker icon on any AI response to hear it read aloud
+- **Fully offline** -- everything runs locally via Docker and Ollama
 
 ## How it's built
 
 ### Architecture
 
 ```
-                         Chrome Extension (MV3)
-                         ______________________
-                        |                      |
-  Webpage ----------->  | content.js           |  Extracts text (Readability / Twitter / selection)
-                        |   |                  |
-                        |   v                  |
-                        | background.js        |  Chunks text, calls TTS API, manages state
-                        |   |                  |
-                        |   v                  |
-                        | offscreen.js         |  Plays audio (MV3 service workers can't play audio)
-                        |______________________|
-                              |
-                    POST /v1/audio/speech
-                              |
-                    __________|__________
-                   |                     |
-             Kokoro-FastAPI        KittenTTS server
-             localhost:8880        localhost:8881
-             (Docker)              (Docker)
+Chrome Extension (MV3)
+  sidepanel.html/js .......... Combined TTS + Chat UI
+  background.js .............. Service worker: TTS orchestration, routing
+  content.js ................. Text extraction (Readability, Twitter, PDF detect)
+  offscreen.js ............... Audio playback + PDF.js text extraction
+        |                              |
+        | POST /v1/audio/speech        | POST /sessions, /chat
+        |                              |
+  Kokoro / KittenTTS              Chat Server (FastAPI + PydanticAI)
+  localhost:8880 / 8881           localhost:8882 (Docker)
+                                       |
+                                       | Ollama API
+                                       |
+                                   Ollama (host)
+                                   localhost:11434
+                                   model: qwen3.5:35b
 ```
 
 ### Extension (Chrome MV3, vanilla JS)
 
-The extension is built with plain JavaScript -- no React, no webpack, no build step. You load it as an unpacked extension directly from the source directory.
+Plain JavaScript, no build step. Everything consolidates into a single **Chrome Side Panel** — clicking the extension icon opens the panel with TTS controls on top and a chat interface below.
 
-Chrome MV3 imposes several constraints that shaped the architecture:
+Key MV3 constraints that shaped the design:
 
-- **Service workers can't play audio.** The background script (`background.js`) runs as a service worker, so all audio playback happens in an [offscreen document](https://developer.chrome.com/docs/extensions/reference/api/offscreen) (`offscreen.js`). Messages are routed between background and offscreen using `chrome.runtime.sendMessage` with a `target` field to prevent broadcast collisions.
+- **Service workers can't play audio.** All playback happens in an [offscreen document](https://developer.chrome.com/docs/extensions/reference/api/offscreen). Messages route between background and offscreen using a `target` field.
+- **No popups.** The side panel replaces the popup entirely (`openPanelOnActionClick: true`). It persists across tab navigation and has full Chrome API access.
+- **Content scripts extract text.** Mozilla Readability runs on a cloned DOM. PDF detection hands off to the background, which fetches the PDF and sends it to the offscreen document where PDF.js runs.
 
-- **Content scripts run in page context.** Text extraction (`content.js`) uses Mozilla Readability on a cloned DOM (Readability destructively modifies the document). For PDFs, the content script detects the page type and hands off to the background, which fetches the PDF and sends it to the offscreen document where PDF.js runs.
+### Text-to-speech pipeline
 
-- **No ES module imports in service workers.** Background dependencies (`constants.js`, `utils/textProcessor.js`) are loaded via `importScripts()`.
+1. **Extraction** -- content script pulls text based on page type
+2. **Cleaning** -- strips markdown, HTML, processes URLs into readable form
+3. **Sentence splitting** -- splits on `.!?` while protecting abbreviations and decimals
+4. **Chunking** -- groups sentences into ~500 character chunks
+5. **TTS** -- each chunk sent as `POST /v1/audio/speech` to the local TTS server
+6. **Pre-fetching** -- chunk N+1 fetched while chunk N plays
+7. **Playback** -- audio plays in offscreen document via `<audio>` + Web Audio API
 
-### Text pipeline
+### Chat pipeline
 
-1. **Extraction** -- content script extracts text based on page type (Readability for articles, DOM scraping for tweets, PDF.js for PDFs)
-2. **Cleaning** -- strips markdown, HTML tags, processes URLs into readable form ("example dot com link"), replaces symbols with words
-3. **Sentence splitting** -- splits on `.!?` boundaries while protecting abbreviations (Mr., Dr., etc.) and decimal numbers
-4. **Chunking** -- groups sentences into chunks of ~500 characters max
-5. **TTS** -- each chunk is sent as a `POST /v1/audio/speech` request to the local TTS server
-6. **Pre-fetching** -- while chunk N plays, chunk N+1 is fetched in the background for gapless transitions
-7. **Playback** -- audio plays in the offscreen document via an `<audio>` element with Web Audio API for routing
+1. **Session creation** -- side panel extracts page text and sends to chat server
+2. **Workspace** -- server creates a folder in `~/.voxlocal/workspaces/{session_id}/` with `context.txt` (page content), `history.json` (conversation), and `meta.json` (URL, title)
+3. **Agent** -- PydanticAI agent with page content as instructions, connected to Ollama
+4. **Streaming** -- responses stream back via SSE for real-time display
+5. **Read aloud** -- each AI response has a speaker button that sends the text through the TTS pipeline
 
 ### TTS backends
 
-Both backends expose an [OpenAI-compatible](https://platform.openai.com/docs/api-reference/audio/createSpeech) API, so the extension code is backend-agnostic.
+Both expose an [OpenAI-compatible](https://platform.openai.com/docs/api-reference/audio/createSpeech) API.
 
-**Kokoro-FastAPI** (default, port 8880) wraps the [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) model in a FastAPI server with an OpenAI-compatible API. It runs in Docker with CPU inference via ONNX Runtime. 50+ voices across American English, British English, Japanese, and Chinese. The Docker image is published at `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`.
+**Kokoro-FastAPI** (default, port 8880) wraps [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) in a FastAPI server with CPU inference via ONNX Runtime. 50+ voices, multi-language. Docker image: `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`.
 
-**KittenTTS** (port 8881) is a lightweight TTS library (15M-80M parameter models) that only ships as a Python package -- no server, no Docker image. We wrote a FastAPI wrapper (`kittentts-server/server.py`) that exposes the same `/v1/audio/speech` and `/v1/audio/voices` endpoints. The wrapper handles voice mapping, audio encoding (via soundfile/numpy), and CORS. 8 English voices. The Dockerfile installs espeak-ng and ffmpeg as system dependencies.
+**KittenTTS** (port 8881) is a lightweight Python TTS library. We wrote a FastAPI wrapper (`kittentts-server/`) exposing the same endpoints. 8 English voices, very lightweight.
+
+### Chat backend
+
+**PydanticAI** agent connected to **Ollama** via the OpenAI-compatible provider. The chat server (`chat-server/`) is a FastAPI app that:
+- Creates per-session workspace directories with page content saved as files
+- Manages multi-turn conversation history
+- Streams responses via SSE
+- Runs in Docker with the workspace volume mounted from the host
 
 ## Third-party projects
 
 | Project | What it does | Where it's used | License |
 |---------|-------------|-----------------|---------|
-| [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) | OpenAI-compatible API server for Kokoro-82M TTS model | Docker container on port 8880 | Apache 2.0 |
+| [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) | OpenAI-compatible TTS server for Kokoro-82M | Docker container, port 8880 | Apache 2.0 |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) | 82M parameter text-to-speech model | Used by Kokoro-FastAPI | Apache 2.0 |
-| [KittenTTS](https://github.com/KittenML/KittenTTS) | Lightweight TTS library (ONNX, CPU-optimized) | Wrapped in `kittentts-server/` | MIT |
-| [Mozilla Readability](https://github.com/mozilla/readability) | Extracts article content from web pages (same engine as Firefox Reader View) | Bundled as `lib/readability.js`, injected as content script | Apache 2.0 |
-| [PDF.js](https://mozilla.github.io/pdf.js/) | PDF parsing and text extraction | Bundled as `lib/pdf.min.mjs` + `lib/pdf.worker.min.mjs` (v4.10.38), loaded in offscreen document | Apache 2.0 |
-| [FastAPI](https://fastapi.tiangolo.com/) | Python web framework | KittenTTS server wrapper | MIT |
-| [soundfile](https://github.com/bastibe/python-soundfile) | Audio encoding (WAV, MP3, FLAC, OGG) | KittenTTS server audio output | BSD-3-Clause |
+| [KittenTTS](https://github.com/KittenML/KittenTTS) | Lightweight TTS library (ONNX, CPU) | Wrapped in `kittentts-server/` | MIT |
+| [Ollama](https://ollama.com/) | Local LLM runtime | Runs qwen3.5:35b for chat | MIT |
+| [PydanticAI](https://ai.pydantic.dev/) | Python agent framework | Chat server agent logic | MIT |
+| [Mozilla Readability](https://github.com/mozilla/readability) | Article content extraction | Bundled as `lib/readability.js` | Apache 2.0 |
+| [PDF.js](https://mozilla.github.io/pdf.js/) | PDF text extraction | Bundled as `lib/pdf.min.mjs` (v4.10.38) | Apache 2.0 |
+| [FastAPI](https://fastapi.tiangolo.com/) | Python web framework | KittenTTS + chat server wrappers | MIT |
 
 ### Forked from
 
-This project is based on [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty. The original was a simpler Chrome extension for Kokoro-FastAPI. Voxlocal is a substantial rewrite that adds PDF support, Twitter extraction, a second TTS backend, gapless pre-fetched playback, skip controls, a floating widget, text preprocessing, and the KittenTTS server wrapper.
+Based on [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty. Voxlocal is a substantial rewrite adding the chat agent, side panel UI, PDF support, Twitter extraction, KittenTTS backend, and gapless playback.
 
 ## Quick start
 
-### 1. Start a TTS server
+### 1. Install Ollama
 
 ```bash
-# Clone this repo
+# macOS
+brew install ollama
+
+# Or download from https://ollama.com/download
+
+# Start Ollama and pull the model
+ollama serve &
+ollama pull qwen3.5:35b
+```
+
+### 2. Start the servers
+
+```bash
 git clone https://github.com/kargarisaac/voxlocal.git
 cd voxlocal
 
-# Start Kokoro TTS (recommended)
-docker compose up -d kokoro-tts
+# Create the workspaces directory
+mkdir -p ~/.voxlocal/workspaces
 
-# Or start both backends
+# Start TTS + chat server
+docker compose up -d kokoro-tts chat-server
+
+# Or start everything (including KittenTTS)
 docker compose up -d
 ```
 
-Wait ~30 seconds for the model to load, then verify:
+Wait ~30 seconds for models to load, then verify:
 
 ```bash
+# TTS
 curl http://localhost:8880/health
-# {"status":"healthy"}
+
+# Chat server
+curl http://localhost:8882/health
 ```
 
-### 2. Load the extension
+### 3. Load the extension
 
-1. Open `chrome://extensions/` in Chrome
+1. Open `chrome://extensions/`
 2. Enable **Developer mode** (top-right toggle)
-3. Click **Load unpacked**
-4. Select the `voxlocal` folder
-5. The extension icon appears in the toolbar
+3. Click **Load unpacked** and select the `voxlocal` folder
+4. Click the Voxlocal icon in the toolbar — the side panel opens
 
-### 3. Read something
+### 4. Use it
 
-- **Read a page**: click the extension icon, then play
-- **Read selected text**: select text, right-click, choose "Read aloud with Local TTS"
-- **Read a PDF**: open a PDF in Chrome, click the extension icon, set page range, click "Read PDF"
-- **Keyboard shortcuts**: `Alt+Shift+R` to read/pause, `Alt+Shift+S` to stop
+**Read a page:** Click the play button in the side panel. The extension auto-extracts article content.
+
+**Chat about a page:** Type a message in the chat input. The page content is automatically loaded as context.
+
+**Read AI responses aloud:** Click the speaker icon on any AI response.
+
+**Read selected text:** Select text, right-click, choose "Read aloud with Voxlocal".
+
+**Read a PDF:** Open a PDF in Chrome. The PDF section appears in the side panel with page range controls.
+
+**Keyboard shortcuts:** `Alt+Shift+R` to read/pause, `Alt+Shift+S` to stop.
 
 ## Configuration
 
-Open the extension's **Settings** page (click "Settings" in the popup footer, or go to `chrome://extensions` and click "Options" on Voxlocal).
+Open **Settings** (link in side panel footer, or `chrome://extensions` > Voxlocal > Options).
 
 | Setting | Default | Description |
 |---------|---------|-------------|
 | Backend | Kokoro TTS | Which TTS server to use |
-| Server URL | `http://localhost:8880/v1/audio/speech` | TTS API endpoint (auto-set when switching backend) |
-| Voice | `af_heart` | TTS voice name |
+| Server URL | `http://localhost:8880/v1/audio/speech` | TTS endpoint |
+| Voice | `af_heart` | TTS voice |
 | Speed | 1.0x | Playback speed (0.5x - 3.0x) |
-| Auto Reader Mode | On | Use Readability to extract article content |
-| Pre-process Text | On | Clean markdown, URLs, and symbols before TTS |
+| Auto Reader Mode | On | Use Readability for article extraction |
+| Pre-process Text | On | Clean markdown, URLs, symbols before TTS |
 | Max Chunk Size | 500 | Characters per TTS request |
 
-### Keyboard shortcuts
+### Chat server environment variables
 
-| Shortcut | Action |
-|----------|--------|
-| `Alt+Shift+R` | Read page/selection, or toggle pause if already playing |
-| `Alt+Shift+S` | Stop reading |
-
-Customize at `chrome://extensions/shortcuts`.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OLLAMA_BASE_URL` | `http://host.docker.internal:11434/v1` | Ollama API endpoint |
+| `MODEL_NAME` | `qwen3.5:35b` | Ollama model to use |
+| `WORKSPACES_DIR` | `/workspaces` | Session workspace directory (in container) |
+| `MAX_HISTORY_TURNS` | `50` | Max conversation turns to include as context |
 
 ## Docker services
 
 | Service | Port | Image | Description |
 |---------|------|-------|-------------|
-| `kokoro-tts` | 8880 | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | Kokoro TTS (CPU, ONNX) |
+| `kokoro-tts` | 8880 | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | Kokoro TTS |
 | `kittentts` | 8881 | Built from `kittentts-server/` | KittenTTS wrapper |
+| `chat-server` | 8882 | Built from `chat-server/` | PydanticAI chat agent |
 
-### Kokoro environment variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `ONNX_NUM_THREADS` | `8` | CPU threads for ONNX inference |
-| `ONNX_INTER_OP_THREADS` | `4` | Parallel operation threads |
-| `CORS_ORIGINS` | `["*"]` | Allowed CORS origins |
+Ollama runs on the host (not Docker) and is accessed by the chat server via `host.docker.internal:11434`.
 
 ### Listing available voices
 
 ```bash
-# Kokoro
-curl http://localhost:8880/v1/audio/voices
-
-# KittenTTS
-curl http://localhost:8881/v1/audio/voices
+curl http://localhost:8880/v1/audio/voices   # Kokoro
+curl http://localhost:8881/v1/audio/voices   # KittenTTS
 ```
 
 ## Project structure
@@ -181,57 +208,77 @@ curl http://localhost:8881/v1/audio/voices
 ```
 voxlocal/
   manifest.json                 Chrome MV3 manifest
-  background.js                 Service worker: chunking, TTS calls, state management
-  content.js                    Content script: text extraction, floating widget
-  offscreen.html / offscreen.js Audio playback + PDF text extraction (offscreen document)
-  popup.html / popup.js         Extension popup UI
+  background.js                 Service worker: TTS, chunking, state, routing
+  content.js                    Content script: text extraction only
+  sidepanel.html / sidepanel.js Side panel: TTS controls + chat UI
+  offscreen.html / offscreen.js Audio playback + PDF text extraction
   options.html / options.js     Settings page
   constants.js                  Backend definitions, default settings
   lib/
-    readability.js              Mozilla Readability (bundled, ~91KB)
-    pdf.min.mjs                 PDF.js main module (bundled, ~353KB)
-    pdf.worker.min.mjs          PDF.js web worker (bundled, ~1.4MB)
+    readability.js              Mozilla Readability (~91KB)
+    pdf.min.mjs                 PDF.js main module (~353KB)
+    pdf.worker.min.mjs          PDF.js web worker (~1.4MB)
   utils/
     textProcessor.js            Text cleaning, sentence splitting, chunking
-    audioPlayer.js              Popup-side audio control abstraction
+    audioPlayer.js              Side panel audio control abstraction
     pdfExtractor.js             PDF.js wrapper for text extraction
   icons/
     icon16.png / icon48.png / icon128.png
+  chat-server/
+    server.py                   FastAPI + PydanticAI chat agent
+    Dockerfile                  Python 3.12-slim
+    requirements.txt            pydantic-ai, fastapi, uvicorn, httpx
   kittentts-server/
-    server.py                   FastAPI wrapper for KittenTTS library
+    server.py                   FastAPI wrapper for KittenTTS
     Dockerfile                  Python 3.12-slim + espeak-ng + ffmpeg
-    requirements.txt            Python dependencies
-  docker-compose.yml            Docker setup for both TTS backends
+    requirements.txt
+  docker-compose.yml            All services
+```
+
+## Workspace structure
+
+Each chat session creates a workspace in `~/.voxlocal/workspaces/`:
+
+```
+~/.voxlocal/workspaces/
+  a1b2c3d4e5f6/
+    context.txt       Page text content
+    history.json      Conversation turns [{role, content}, ...]
+    meta.json         Page URL and title
 ```
 
 ## Troubleshooting
 
-**"Server offline" in popup**
-- Check containers are running: `docker compose ps`
+**"TTS offline" in side panel**
+- Check containers: `docker compose ps`
 - Check logs: `docker compose logs kokoro-tts`
-- Verify health: `curl http://localhost:8880/health`
+- Verify: `curl http://localhost:8880/health`
+
+**"LLM offline" in side panel**
+- Check Ollama is running: `ollama ls`
+- Check chat server: `docker compose logs chat-server`
+- Verify: `curl http://localhost:8882/health`
+- Make sure the model is pulled: `ollama pull qwen3.5:35b`
+
+**Chat responses are slow**
+- Larger models are slower. Try `qwen3.5:4b` for faster responses.
+- Change the model: edit `MODEL_NAME` in `docker-compose.yml` and restart.
 
 **No text extracted**
-- Wait for SPAs to finish loading
-- Try selecting text manually and using right-click > "Read aloud with Local TTS"
-- Check the browser console for errors (right-click extension icon > Inspect popup)
+- Wait for SPAs to load, then re-open the side panel.
+- Try selecting text and right-click > "Read aloud with Voxlocal".
 
 **PDF not working**
-- Remote PDFs (http/https) should work out of the box
-- For local `file://` PDFs, enable "Allow access to file URLs" in `chrome://extensions/` for Voxlocal
-- arxiv PDFs (`/pdf/` in URL) are detected automatically
-
-**Audio issues**
-- Try a different voice or lower speed
-- Restart the TTS server: `docker compose restart kokoro-tts`
-- Check the offscreen document console: go to `chrome://extensions`, find Voxlocal, click "Inspect views: offscreen.html"
+- Remote PDFs (http/https) work out of the box.
+- For local `file://` PDFs: enable "Allow access to file URLs" in `chrome://extensions/`.
 
 ## Requirements
 
-- Chrome 120+ (MV3 offscreen document support)
-- Docker and Docker Compose (for TTS servers)
-- ~2GB disk for Kokoro Docker image (includes model weights)
-- CPU inference only -- no GPU required
+- Chrome 116+ (side panel + `sidePanel.open()` support)
+- Docker and Docker Compose
+- Ollama installed on host with a model pulled
+- ~2GB disk for Kokoro Docker image
+- ~23GB for qwen3.5:35b model (or less for smaller models)
 
 ## License
 
@@ -242,6 +289,8 @@ MIT License. See [LICENSE](LICENSE).
 - [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) by remsky
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad
 - [KittenTTS](https://github.com/KittenML/KittenTTS) by KittenML
-- [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty (original extension this project is based on)
+- [Ollama](https://ollama.com/) by the Ollama team
+- [PydanticAI](https://ai.pydantic.dev/) by Pydantic
+- [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty
 - [Mozilla Readability](https://github.com/mozilla/readability) by Mozilla
 - [PDF.js](https://mozilla.github.io/pdf.js/) by Mozilla

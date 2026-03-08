@@ -1,5 +1,5 @@
 /**
- * Background service worker for Local TTS Reader.
+ * Background service worker for Voxlocal.
  * Orchestrates text extraction, chunking, TTS API calls, and audio playback.
  */
 importScripts('constants.js', 'utils/textProcessor.js');
@@ -34,9 +34,7 @@ async function ensureOffscreen() {
 
 async function getSettings() {
   return new Promise((resolve) => {
-    chrome.storage.local.get(DEFAULT_SETTINGS, (result) => {
-      resolve(result);
-    });
+    chrome.storage.local.get(DEFAULT_SETTINGS, (result) => resolve(result));
   });
 }
 
@@ -52,10 +50,6 @@ function getBackendUrls(settings) {
 
 // ─── Targeted Messaging ─────────────────────────────────────────────
 
-/**
- * Send a message targeted to the offscreen document only.
- * Uses a target field so the offscreen listener can filter.
- */
 function sendToOffscreen(msg) {
   return chrome.runtime.sendMessage({ ...msg, target: 'offscreen' }).catch(() => {});
 }
@@ -71,18 +65,7 @@ function broadcastState(state, extra) {
     totalChunks: totalChunks,
     ...extra
   };
-
   chrome.runtime.sendMessage(msg).catch(() => {});
-
-  // Update floating widget on the active tab
-  if (activeTabId) {
-    chrome.tabs.sendMessage(activeTabId, {
-      type: state === 'stopped' ? 'hideWidget' : 'updateWidget',
-      state: state,
-      chunkIndex: currentChunkIndex,
-      totalChunks: totalChunks
-    }).catch(() => {});
-  }
 }
 
 function broadcastError(errorMsg) {
@@ -97,7 +80,6 @@ function broadcastError(errorMsg) {
 
 async function fetchAudioForChunk(text, settings, signal) {
   const urls = getBackendUrls(settings);
-
   const body = {
     model: 'kokoro',
     voice: settings.voice || 'af_heart',
@@ -125,7 +107,6 @@ async function fetchAudioForChunk(text, settings, signal) {
   const blob = await response.blob();
   const mimeType = blob.type || 'audio/mpeg';
   const arrayBuffer = await blob.arrayBuffer();
-
   return {
     data: Array.from(new Uint8Array(arrayBuffer)),
     mimeType: mimeType
@@ -136,7 +117,6 @@ async function fetchAudioForChunk(text, settings, signal) {
 
 async function startChunkPlayback(chunkIndex) {
   if (chunkIndex >= totalChunks) {
-    // All chunks done
     broadcastState('stopped');
     return;
   }
@@ -145,7 +125,6 @@ async function startChunkPlayback(chunkIndex) {
   broadcastState('loading');
 
   try {
-    // Check if we already prefetched this chunk
     let audio;
     if (prefetchedAudio.has(chunkIndex)) {
       audio = prefetchedAudio.get(chunkIndex);
@@ -158,7 +137,6 @@ async function startChunkPlayback(chunkIndex) {
       );
     }
 
-    // Send audio to offscreen for playback
     await ensureOffscreen();
     sendToOffscreen({
       type: 'playAudioChunk',
@@ -168,12 +146,10 @@ async function startChunkPlayback(chunkIndex) {
     });
 
     broadcastState('playing');
-
-    // Pre-fetch next chunk
     prefetchNextChunk(chunkIndex + 1);
 
   } catch (error) {
-    if (error.name === 'AbortError') return; // Cancelled
+    if (error.name === 'AbortError') return;
     console.error('Error playing chunk:', error);
     broadcastError(error.message);
   }
@@ -200,13 +176,10 @@ async function prefetchNextChunk(nextIndex) {
 // ─── Reading Orchestration ───────────────────────────────────────────
 
 async function startReading(settings) {
-  // Stop any current playback
   stopPlayback();
-
   currentSettings = settings;
   abortController = new AbortController();
 
-  // Get active tab
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
   if (!tabs || tabs.length === 0) {
     broadcastError('No active tab found');
@@ -216,24 +189,14 @@ async function startReading(settings) {
   activeTabId = tabs[0].id;
   const tabUrl = tabs[0].url || '';
 
-  // Check if this is a PDF
   if (isPdfUrl(tabUrl)) {
-    broadcastError('This is a PDF page. Use the PDF reader with page range in the popup.');
+    broadcastError('This is a PDF page. Use the PDF reader with page range in the side panel.');
     return;
   }
 
   broadcastState('loading');
 
-  // Show widget
-  chrome.tabs.sendMessage(activeTabId, {
-    type: 'showWidget',
-    state: 'loading',
-    chunkIndex: 0,
-    totalChunks: 0
-  }).catch(() => {});
-
   try {
-    // Extract text via content script
     let result;
     try {
       result = await chrome.tabs.sendMessage(activeTabId, {
@@ -241,7 +204,6 @@ async function startReading(settings) {
         useReaderMode: settings.autoReaderMode !== false
       });
     } catch (e) {
-      // Content script not loaded - try injecting
       try {
         await chrome.scripting.executeScript({
           target: { tabId: activeTabId },
@@ -261,13 +223,11 @@ async function startReading(settings) {
     }
 
     if (result.source === 'pdf') {
-      broadcastError('This is a PDF page. Use the PDF reader in the popup.');
+      broadcastError('This is a PDF page. Use the PDF reader in the side panel.');
       return;
     }
 
     let text = result.text;
-
-    // Pre-process text
     if (settings.preprocessText !== false) {
       text = TextProcessor.process(text);
     }
@@ -276,7 +236,6 @@ async function startReading(settings) {
       throw new Error('No readable text found on this page.');
     }
 
-    // Split into chunks
     const maxChunkSize = settings.maxChunkSize || 500;
     chunks = TextProcessor.chunkText(text, maxChunkSize);
     totalChunks = chunks.length;
@@ -285,7 +244,6 @@ async function startReading(settings) {
       throw new Error('No text to read.');
     }
 
-    // Start playback from first chunk
     await startChunkPlayback(0);
 
   } catch (error) {
@@ -295,9 +253,11 @@ async function startReading(settings) {
   }
 }
 
-async function readPdf(url, pageStart, pageEnd, settings) {
+/**
+ * Read arbitrary text aloud (used for reading AI chat responses).
+ */
+async function readText(text, settings) {
   stopPlayback();
-
   currentSettings = settings;
   abortController = new AbortController();
 
@@ -307,7 +267,43 @@ async function readPdf(url, pageStart, pageEnd, settings) {
   broadcastState('loading');
 
   try {
-    // Fetch the PDF
+    let processedText = text;
+    if (settings.preprocessText !== false) {
+      processedText = TextProcessor.process(processedText);
+    }
+
+    if (!processedText || processedText.trim().length === 0) {
+      throw new Error('No text to read.');
+    }
+
+    const maxChunkSize = settings.maxChunkSize || 500;
+    chunks = TextProcessor.chunkText(processedText, maxChunkSize);
+    totalChunks = chunks.length;
+
+    if (totalChunks === 0) {
+      throw new Error('No text to read.');
+    }
+
+    await startChunkPlayback(0);
+
+  } catch (error) {
+    if (error.name === 'AbortError') return;
+    console.error('Error in readText:', error);
+    broadcastError(error.message);
+  }
+}
+
+async function readPdf(url, pageStart, pageEnd, settings) {
+  stopPlayback();
+  currentSettings = settings;
+  abortController = new AbortController();
+
+  const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  activeTabId = tabs && tabs.length > 0 ? tabs[0].id : null;
+
+  broadcastState('loading');
+
+  try {
     const response = await fetch(url, { signal: abortController.signal });
     if (!response.ok) {
       throw new Error(`Failed to fetch PDF: ${response.status}`);
@@ -315,7 +311,6 @@ async function readPdf(url, pageStart, pageEnd, settings) {
 
     const arrayBuffer = await response.arrayBuffer();
 
-    // Send to offscreen for PDF.js extraction
     await ensureOffscreen();
     const result = await sendToOffscreen({
       type: 'extractPdfText',
@@ -324,21 +319,16 @@ async function readPdf(url, pageStart, pageEnd, settings) {
       pageEnd: pageEnd || null
     });
 
-    if (result && result.error) {
-      throw new Error(result.error);
-    }
-
+    if (result && result.error) throw new Error(result.error);
     if (!result || !result.result || !result.result.pages) {
       throw new Error('Failed to extract text from PDF');
     }
 
-    // Combine page texts
     let text = result.result.pages
       .map(p => p.text)
       .filter(t => t && t.trim().length > 0)
       .join(' ');
 
-    // Pre-process
     if (settings.preprocessText !== false) {
       text = TextProcessor.process(text);
     }
@@ -347,7 +337,6 @@ async function readPdf(url, pageStart, pageEnd, settings) {
       throw new Error('No readable text found in this PDF.');
     }
 
-    // Chunk and play
     const maxChunkSize = settings.maxChunkSize || 500;
     chunks = TextProcessor.chunkText(text, maxChunkSize);
     totalChunks = chunks.length;
@@ -372,20 +361,12 @@ function stopPlayback() {
     abortController.abort();
     abortController = null;
   }
-
   chunks = [];
   currentChunkIndex = -1;
   totalChunks = 0;
   prefetchedAudio.clear();
   playerState = 'stopped';
-
-  // Tell offscreen to stop
   sendToOffscreen({ type: 'stop' });
-
-  // Hide widget
-  if (activeTabId) {
-    chrome.tabs.sendMessage(activeTabId, { type: 'hideWidget' }).catch(() => {});
-  }
 }
 
 function pausePlayback() {
@@ -402,21 +383,17 @@ function skipChunk(direction) {
   let newIndex;
   if (direction === 'next') {
     newIndex = currentChunkIndex + 1;
-    if (newIndex >= totalChunks) return; // Already at end
+    if (newIndex >= totalChunks) return;
   } else {
     newIndex = currentChunkIndex - 1;
     if (newIndex < 0) newIndex = 0;
   }
 
-  // Clear queued audio but do NOT send 'stop' — playChunk will replace
-  // the current audio directly, avoiding the stale stateUpdate:stopped race
   sendToOffscreen({ type: 'clearQueue' });
 
-  // Abort any in-flight prefetch for the old sequence
   if (abortController) abortController.abort();
   abortController = new AbortController();
 
-  // Start new chunk (playChunk replaces the audio element's src directly)
   startChunkPlayback(newIndex);
 }
 
@@ -429,21 +406,13 @@ async function fetchVoices(settings) {
       method: 'GET',
       headers: { 'Accept': 'application/json' }
     });
-
-    if (!response.ok) {
-      throw new Error(`Voice list request failed: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`Voice list request failed: ${response.status}`);
     const data = await response.json();
     const voices = data.voices || [];
-
-    // Cache voices
     await chrome.storage.local.set({ cachedVoices: voices });
     return voices;
-
   } catch (error) {
     console.warn('Failed to fetch voices:', error);
-    // Try cached
     const stored = await chrome.storage.local.get('cachedVoices');
     return stored.cachedVoices || [];
   }
@@ -458,12 +427,8 @@ async function checkHealth(settings) {
       method: 'GET',
       signal: AbortSignal.timeout(3000)
     });
-
-    if (response.ok) {
-      return { healthy: true };
-    }
+    if (response.ok) return { healthy: true };
     return { healthy: false, error: `HTTP ${response.status}` };
-
   } catch (error) {
     return { healthy: false, error: error.message };
   }
@@ -473,11 +438,8 @@ async function checkHealth(settings) {
 
 function isPdfUrl(url) {
   if (!url) return false;
-  // .pdf with optional query/hash
   if (url.match(/\.pdf(\?|#|$)/i)) return true;
-  // Chrome internal PDF viewer
   if (url.includes('chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/')) return true;
-  // Path contains /pdf/ or ends with /pdf (arxiv, etc.)
   try {
     const pathname = new URL(url).pathname;
     if (/\/pdf(\/|$)/i.test(pathname)) return true;
@@ -503,7 +465,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   const settings = await getSettings();
 
   if (info.selectionText) {
-    // Read selected text directly
     stopPlayback();
     currentSettings = settings;
     abortController = new AbortController();
@@ -519,18 +480,9 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     totalChunks = chunks.length;
 
     if (totalChunks > 0) {
-      // Show widget
-      chrome.tabs.sendMessage(tab.id, {
-        type: 'showWidget',
-        state: 'loading',
-        chunkIndex: 0,
-        totalChunks: totalChunks
-      }).catch(() => {});
-
       await startChunkPlayback(0);
     }
   } else {
-    // Read full page
     activeTabId = tab.id;
     startReading(settings);
   }
@@ -569,6 +521,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse({ ok: true });
       return false;
 
+    case 'readText':
+      readText(message.text, message.settings);
+      sendResponse({ ok: true });
+      return false;
+
     case 'readPdf':
       readPdf(message.url, message.pageStart, message.pageEnd, message.settings);
       sendResponse({ ok: true });
@@ -595,10 +552,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         chunkIndex: currentChunkIndex,
         totalChunks: totalChunks
       });
-      return false; // synchronous response
+      return false;
 
     case 'getTimeInfo':
-      // Forward to offscreen via targeted message
       sendToOffscreen({ type: 'getTimeInfo' })
         .then(response => sendResponse(response))
         .catch(() => sendResponse({ timeInfo: null }));
@@ -624,7 +580,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ─── Forwarded from offscreen ───
     case 'chunkPlaybackEnded':
-      // Current chunk finished, play next
       if (message.chunkIndex !== undefined) {
         const nextIndex = message.chunkIndex + 1;
         if (nextIndex < totalChunks) {
@@ -636,13 +591,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
 
     case 'stateUpdate':
-      // From offscreen: audio state changed
       if (message.state === 'playing') {
         broadcastState('playing');
       } else if (message.state === 'paused') {
         broadcastState('paused');
       } else if (message.state === 'stopped') {
-        // Only update if we're not transitioning between chunks
         if (playerState !== 'loading') {
           broadcastState('stopped');
         }
@@ -650,7 +603,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
 
     case 'audioTimeUpdate':
-      // Forward time updates to popup
       chrome.runtime.sendMessage({
         type: 'timeUpdate',
         timeInfo: message.timeInfo
@@ -658,7 +610,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return false;
 
     case 'streamError':
-      // Error from offscreen
       if (sender.url && sender.url.includes('offscreen')) {
         broadcastError(message.error);
       }
@@ -673,9 +624,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 chrome.runtime.onInstalled.addListener(() => {
   setupContextMenu();
+  // Open side panel when extension icon is clicked
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
 });
 
-// Re-create context menu on startup (in case service worker was killed)
 chrome.runtime.onStartup.addListener(() => {
   setupContextMenu();
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }).catch(console.error);
 });

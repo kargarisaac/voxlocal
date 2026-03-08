@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Voxlocal</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ─── TTS Section (top) ─── */
+    .tts-section {
+      flex-shrink: 0;
+      padding: 12px;
+      border-bottom: 1px solid #0f3460;
+      background: #16213e;
+    }
+    .tts-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+    .tts-header h2 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e94560;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+    }
+    .server-status {
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .server-status .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .server-status .dot.ok { background: #2ecc71; }
+    .server-status .dot.err { background: #e74c3c; }
+
+    /* Status bar */
+    .status-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: #1a1a2e;
+      padding: 6px 10px;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    .status-left {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .status-dot {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      background: #666;
+      flex-shrink: 0;
+    }
+    .status-dot.playing { background: #2ecc71; animation: blink 1.5s infinite; }
+    .status-dot.paused  { background: #f39c12; }
+    .status-dot.loading { background: #3498db; animation: blink 0.6s infinite; }
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.3; }
+    }
+    .status-text { font-size: 11px; color: #aaa; }
+    .chunk-info { font-size: 10px; color: #666; }
+
+    /* Controls */
+    .controls {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      margin-bottom: 8px;
+      position: relative;
+    }
+    .btn {
+      background: #0f3460;
+      color: #e6e6e6;
+      border: none;
+      border-radius: 50%;
+      width: 30px; height: 30px;
+      cursor: pointer;
+      transition: all 0.2s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 12px;
+      padding: 0;
+    }
+    .btn:hover:not(:disabled) {
+      background: #e94560;
+      transform: scale(1.08);
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn.play-btn { width: 34px; height: 34px; font-size: 14px; }
+    .btn.skip-btn {
+      width: 28px; height: 28px;
+      border-radius: 5px;
+      font-size: 10px;
+    }
+    .btn.skip-btn svg { width: 14px; height: 14px; fill: currentColor; }
+    .loading-overlay {
+      position: absolute;
+      top: 0; left: 0; right: 0; bottom: 0;
+      background: rgba(22, 33, 62, 0.85);
+      border-radius: 6px;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 10;
+    }
+    .loading-overlay.visible { display: flex; }
+    .spinner {
+      width: 24px; height: 24px;
+      border: 3px solid rgba(233, 69, 96, 0.2);
+      border-radius: 50%;
+      border-top-color: #e94560;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* Seek bar */
+    .seek-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .seek-bar {
+      flex: 1;
+      height: 4px;
+      -webkit-appearance: none;
+      background: #0f3460;
+      border-radius: 2px;
+      outline: none;
+    }
+    .seek-bar::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 10px; height: 10px;
+      border-radius: 50%;
+      background: #e94560;
+      cursor: pointer;
+    }
+    .seek-bar:disabled::-webkit-slider-thumb { background: #444; cursor: not-allowed; }
+    .time-label { font-size: 10px; color: #666; min-width: 32px; }
+    .time-label.right { text-align: right; }
+
+    /* Voice/Speed row */
+    .settings-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+    }
+    .settings-row select {
+      flex: 1;
+      padding: 4px 6px;
+      border-radius: 4px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      font-size: 11px;
+      outline: none;
+    }
+    .settings-row select:focus { border-color: #e94560; }
+    .btn-sm {
+      background: #0f3460;
+      border: none;
+      color: #e6e6e6;
+      border-radius: 4px;
+      width: 24px; height: 24px;
+      cursor: pointer;
+      font-size: 11px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn-sm:hover { background: #e94560; }
+    .speed-group {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .speed-group input[type="range"] {
+      width: 60px;
+      height: 3px;
+      -webkit-appearance: none;
+      background: #0f3460;
+      border-radius: 2px;
+      outline: none;
+    }
+    .speed-group input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 12px; height: 12px;
+      border-radius: 50%;
+      background: #e94560;
+      cursor: pointer;
+    }
+    .speed-val { font-size: 11px; color: #e94560; font-weight: 600; min-width: 28px; }
+
+    /* PDF section */
+    .pdf-section {
+      background: #1a1a2e;
+      padding: 8px 10px;
+      border-radius: 6px;
+      margin-top: 6px;
+      display: none;
+    }
+    .pdf-section.visible { display: block; }
+    .pdf-section h3 { font-size: 11px; color: #ccc; margin-bottom: 6px; font-weight: 600; }
+    .pdf-range {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 6px;
+    }
+    .pdf-range input[type="number"] {
+      width: 50px;
+      padding: 3px 5px;
+      border-radius: 3px;
+      border: 1px solid #0f3460;
+      background: #16213e;
+      color: #e6e6e6;
+      font-size: 11px;
+      text-align: center;
+      outline: none;
+    }
+    .pdf-range span { font-size: 11px; color: #888; }
+    .btn-read-pdf {
+      width: 100%;
+      background: #0f3460;
+      color: #e6e6e6;
+      border: none;
+      border-radius: 4px;
+      padding: 6px;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+    }
+    .btn-read-pdf:hover { background: #e94560; }
+
+    /* Error banner */
+    .error-banner {
+      background: rgba(231, 76, 60, 0.15);
+      border: 1px solid rgba(231, 76, 60, 0.3);
+      color: #e74c3c;
+      padding: 6px 10px;
+      border-radius: 5px;
+      font-size: 11px;
+      margin-bottom: 8px;
+      display: none;
+      word-break: break-word;
+    }
+    .error-banner.visible { display: block; }
+
+    /* ─── Chat Section (bottom, fills remaining space) ─── */
+    .chat-section {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+      padding: 0;
+    }
+    .chat-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-bottom: 1px solid #0f3460;
+      background: #16213e;
+      flex-shrink: 0;
+      gap: 8px;
+    }
+    .chat-header h2 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e94560;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      flex-shrink: 0;
+    }
+    .model-select {
+      flex: 1;
+      min-width: 0;
+      padding: 3px 6px;
+      border-radius: 4px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      font-size: 11px;
+      outline: none;
+      cursor: pointer;
+    }
+    .model-select:focus { border-color: #e94560; }
+    .chat-status {
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      flex-shrink: 0;
+    }
+    .chat-status .dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: #666;
+    }
+    .chat-status .dot.ok { background: #2ecc71; }
+    .chat-status .dot.err { background: #e74c3c; }
+
+    /* Messages */
+    .chat-messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .chat-messages::-webkit-scrollbar { width: 5px; }
+    .chat-messages::-webkit-scrollbar-track { background: #1a1a2e; }
+    .chat-messages::-webkit-scrollbar-thumb { background: #0f3460; border-radius: 3px; }
+
+    .msg {
+      max-width: 90%;
+      padding: 8px 12px;
+      border-radius: 10px;
+      font-size: 13px;
+      line-height: 1.5;
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .msg.user {
+      align-self: flex-end;
+      background: #0f3460;
+      color: #e6e6e6;
+      border-bottom-right-radius: 3px;
+    }
+    .msg.ai {
+      align-self: flex-start;
+      background: #16213e;
+      color: #e6e6e6;
+      border: 1px solid #0f3460;
+      border-bottom-left-radius: 3px;
+    }
+    .msg.ai .msg-content { margin-bottom: 4px; }
+    .msg.ai .msg-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 6px;
+      padding-top: 6px;
+      border-top: 1px solid rgba(15, 52, 96, 0.5);
+    }
+    .msg-action-btn {
+      background: none;
+      border: 1px solid #0f3460;
+      color: #aaa;
+      border-radius: 4px;
+      padding: 3px 8px;
+      cursor: pointer;
+      font-size: 10px;
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      transition: all 0.2s;
+    }
+    .msg-action-btn:hover { color: #e94560; border-color: #e94560; }
+    .msg-action-btn svg { width: 12px; height: 12px; fill: currentColor; }
+
+    .msg.system {
+      align-self: center;
+      background: none;
+      color: #666;
+      font-size: 11px;
+      font-style: italic;
+      padding: 4px;
+    }
+    .msg.ai.streaming .cursor {
+      display: inline-block;
+      width: 7px;
+      height: 14px;
+      background: #e94560;
+      animation: cursorBlink 0.8s step-end infinite;
+      vertical-align: text-bottom;
+      margin-left: 2px;
+    }
+    @keyframes cursorBlink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Input area */
+    .chat-input-area {
+      display: flex;
+      gap: 8px;
+      padding: 10px 12px;
+      border-top: 1px solid #0f3460;
+      background: #16213e;
+      flex-shrink: 0;
+    }
+    .chat-input {
+      flex: 1;
+      padding: 8px 10px;
+      border-radius: 8px;
+      border: 1px solid #0f3460;
+      background: #1a1a2e;
+      color: #e6e6e6;
+      font-size: 13px;
+      font-family: inherit;
+      outline: none;
+      resize: none;
+      max-height: 80px;
+      min-height: 36px;
+    }
+    .chat-input:focus { border-color: #e94560; }
+    .chat-input::placeholder { color: #555; }
+    .btn-send {
+      background: #e94560;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      padding: 0 14px;
+      cursor: pointer;
+      font-size: 13px;
+      font-weight: 600;
+      transition: background 0.2s;
+      flex-shrink: 0;
+    }
+    .btn-send:hover { background: #d03050; }
+    .btn-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
+    /* Footer */
+    .footer-bar {
+      display: flex;
+      justify-content: flex-end;
+      padding: 4px 12px;
+      background: #16213e;
+      border-top: 1px solid #0f3460;
+      flex-shrink: 0;
+    }
+    .footer-bar a {
+      font-size: 10px;
+      color: #555;
+      text-decoration: none;
+      cursor: pointer;
+    }
+    .footer-bar a:hover { color: #e94560; }
+  </style>
+</head>
+<body>
+
+  <!-- ─── TTS Section ─── -->
+  <div class="tts-section">
+    <div class="error-banner" id="errorBanner"></div>
+
+    <div class="tts-header">
+      <h2>Reader</h2>
+      <div class="server-status">
+        <div class="dot" id="serverDot"></div>
+        <span id="serverLabel">Checking...</span>
+      </div>
+    </div>
+
+    <div class="status-bar">
+      <div class="status-left">
+        <div class="status-dot" id="statusDot"></div>
+        <span class="status-text" id="statusText">Ready</span>
+      </div>
+      <span class="chunk-info" id="chunkInfo"></span>
+    </div>
+
+    <div class="controls">
+      <button class="btn skip-btn" id="prevBtn" title="Previous chunk" disabled>
+        <svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z" transform="scale(-1,1) translate(-24,0)"/></svg>
+      </button>
+      <button class="btn play-btn" id="playBtn" title="Play">&#9654;</button>
+      <button class="btn" id="pauseBtn" title="Pause" disabled>&#10074;&#10074;</button>
+      <button class="btn" id="stopBtn" title="Stop">&#9724;</button>
+      <button class="btn skip-btn" id="nextBtn" title="Next chunk" disabled>
+        <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
+      </button>
+      <div class="loading-overlay" id="loadingOverlay">
+        <div class="spinner"></div>
+      </div>
+    </div>
+
+    <div class="seek-row">
+      <span class="time-label" id="currentTime">0:00</span>
+      <input type="range" class="seek-bar" id="seekBar" min="0" max="100" value="0" step="0.1" disabled>
+      <span class="time-label right" id="duration">0:00</span>
+    </div>
+
+    <div class="settings-row">
+      <select id="voice">
+        <option value="af_heart">af_heart (default)</option>
+      </select>
+      <button class="btn-sm" id="refreshVoicesBtn" title="Refresh voices">&#8635;</button>
+      <div class="speed-group">
+        <input type="range" id="speed" min="0.5" max="3.0" step="0.1" value="1.0">
+        <span class="speed-val" id="speedVal">1.0x</span>
+      </div>
+    </div>
+
+    <div class="pdf-section" id="pdfSection">
+      <h3>PDF Reader</h3>
+      <div class="pdf-range">
+        <span>Pages</span>
+        <input type="number" id="pdfPageStart" value="1" min="1">
+        <span>to</span>
+        <input type="number" id="pdfPageEnd" value="" placeholder="end">
+      </div>
+      <button class="btn-read-pdf" id="readPdfBtn">Read PDF</button>
+    </div>
+  </div>
+
+  <!-- ─── Chat Section ─── -->
+  <div class="chat-section">
+    <div class="chat-header">
+      <h2>Chat</h2>
+      <select class="model-select" id="modelSelect" title="Select LLM model">
+        <option value="">Loading models...</option>
+      </select>
+      <div class="chat-status">
+        <div class="dot" id="chatDot"></div>
+        <span id="chatLabel">Checking...</span>
+      </div>
+    </div>
+
+    <div class="chat-messages" id="chatMessages">
+      <div class="msg system" id="chatWelcome">Open a page and start chatting about its content.</div>
+    </div>
+
+    <div class="chat-input-area">
+      <textarea class="chat-input" id="chatInput" placeholder="Ask about this page..." rows="1"></textarea>
+      <button class="btn-send" id="sendBtn" disabled>Send</button>
+    </div>
+  </div>
+
+  <div class="footer-bar">
+    <a id="settingsLink">Settings</a>
+  </div>
+
+  <script src="utils/audioPlayer.js"></script>
+  <script src="constants.js"></script>
+  <script src="sidepanel.js"></script>
+</body>
+</html>

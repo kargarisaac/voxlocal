@@ -5,7 +5,8 @@ const DEFAULT_SETTINGS = {
   speed: 1.0,
   preprocessText: true,
   autoReaderMode: true,
-  maxChunkSize: 500
+  maxChunkSize: 500,
+  chatServerUrl: 'http://localhost:8882'
 };
 
 const BACKENDS = {

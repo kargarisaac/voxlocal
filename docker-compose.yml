@@ -31,5 +31,25 @@ services:
     volumes:
       - kittentts-cache:/home/appuser/.cache
 
+  chat-server:
+    build:
+      context: ./chat-server
+      dockerfile: Dockerfile
+    container_name: voxlocal-chat
+    restart: unless-stopped
+    ports:
+      - "8882:8882"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8882
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
+      - MODEL_NAME=qwen3.5:35b
+      - WORKSPACES_DIR=/workspaces
+      - MAX_HISTORY_TURNS=50
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ${HOME}/.voxlocal/workspaces:/workspaces
+
 volumes:
   kittentts-cache:
