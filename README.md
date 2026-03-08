@@ -208,6 +208,27 @@ curl http://localhost:8882/health
 
 **Keyboard shortcuts:** `Alt+Shift+R` to read/pause, `Alt+Shift+S` to stop.
 
+### Switching the TTS backend
+
+Voxlocal ships with two TTS backends. **Kokoro-FastAPI** is the default (50+ voices, multi-language). **KittenTTS** is a lighter alternative (8 English voices).
+
+1. Make sure both services are running:
+   ```bash
+   docker compose up -d kokoro-tts kittentts
+   ```
+2. Open **Settings** -- click the "Settings" link in the side panel footer, or go to `chrome://extensions` > Voxlocal > Options.
+3. Change the **Backend** dropdown from "Kokoro TTS" to "KittenTTS". The server URL and voice list update automatically.
+4. Pick a voice from the new voice list and click **Save**.
+
+The extension auto-detects which backends are online and shows their status in the side panel. You can switch back anytime by changing the dropdown in Settings.
+
+To list all available voices for either backend:
+
+```bash
+curl http://localhost:8880/v1/audio/voices   # Kokoro
+curl http://localhost:8881/v1/audio/voices   # KittenTTS
+```
+
 ## Configuration
 
 Open **Settings** (link in side panel footer, or `chrome://extensions` > Voxlocal > Options).
@@ -240,13 +261,6 @@ Open **Settings** (link in side panel footer, or `chrome://extensions` > Voxloca
 | `chat-server` | 8882 | Built from `servers/chat/` | Chat server (Ollama streaming) |
 
 Ollama runs on the host (not Docker) and is accessed by the chat server via `host.docker.internal:11434`.
-
-### Listing available voices
-
-```bash
-curl http://localhost:8880/v1/audio/voices   # Kokoro
-curl http://localhost:8881/v1/audio/voices   # KittenTTS
-```
 
 ## Project structure
 
