@@ -1,25 +1,22 @@
 """
 Voxlocal Chat Server.
-FastAPI + PydanticAI agent that chats about page content using a local Ollama LLM.
+FastAPI server that chats about page content using a local Ollama LLM.
+Streams directly from Ollama's native API to get thinking tokens in real-time.
 Page context is saved as files in per-session workspace directories.
 """
 
 import json
 import os
-import re
 import uuid
 import logging
 from pathlib import Path
 from typing import Optional
 
+import httpx
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
-
-from pydantic_ai import Agent
-from pydantic_ai.models.openai import OpenAIChatModel
-from pydantic_ai.providers.ollama import OllamaProvider
+from pydantic import BaseModel
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("voxlocal-chat")
@@ -33,7 +30,7 @@ MAX_HISTORY_TURNS = int(os.environ.get("MAX_HISTORY_TURNS", "50"))
 
 # ─── App Setup ────────────────────────────────────────────────────────
 
-app = FastAPI(title="Voxlocal Chat Server", version="1.0.0")
+app = FastAPI(title="Voxlocal Chat Server", version="1.1.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -41,13 +38,6 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
-)
-
-# ─── PydanticAI Model ────────────────────────────────────────────────
-
-model = OpenAIChatModel(
-    model_name=MODEL_NAME,
-    provider=OllamaProvider(base_url=OLLAMA_BASE_URL),
 )
 
 # ─── Request/Response Models ─────────────────────────────────────────
@@ -70,20 +60,15 @@ class ChatRequest(BaseModel):
     model: Optional[str] = None
 
 
-class HistoryEntry(BaseModel):
-    role: str
-    content: str
+# ─── Ollama URL Helper ───────────────────────────────────────────────
 
 
-# ─── Think Tag Parsing ───────────────────────────────────────────────
-
-
-def _partial_tag_len(text: str, tag: str) -> int:
-    """Return length of a partial tag prefix match at end of text, or 0."""
-    for i in range(min(len(tag) - 1, len(text)), 0, -1):
-        if text.endswith(tag[:i]):
-            return i
-    return 0
+def get_ollama_native_url() -> str:
+    """Get the Ollama native API URL (without /v1 suffix)."""
+    base = OLLAMA_BASE_URL.rstrip("/")
+    if base.endswith("/v1"):
+        base = base[:-3]
+    return base
 
 
 # ─── Workspace Helpers ───────────────────────────────────────────────
@@ -122,8 +107,6 @@ def load_context(workspace: Path) -> str:
 async def health():
     """Health check — also verifies Ollama connectivity."""
     try:
-        import httpx
-
         async with httpx.AsyncClient(timeout=5.0) as client:
             resp = await client.get(get_ollama_native_url())
             ollama_ok = resp.status_code == 200
@@ -137,19 +120,9 @@ async def health():
     }
 
 
-def get_ollama_native_url() -> str:
-    """Get the Ollama native API URL (without /v1 suffix)."""
-    base = OLLAMA_BASE_URL.rstrip("/")
-    if base.endswith("/v1"):
-        base = base[:-3]
-    return base
-
-
 @app.get("/models")
 async def list_models():
     """List locally available Ollama models."""
-    import httpx
-
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.get(get_ollama_native_url() + "/api/tags")
@@ -209,7 +182,11 @@ async def create_session(req: CreateSessionRequest):
 
 @app.post("/sessions/{session_id}/chat")
 async def chat(session_id: str, req: ChatRequest):
-    """Send a message and get a streamed response."""
+    """Send a message and get a streamed response.
+
+    Streams directly from Ollama's native /api/chat endpoint so that
+    thinking tokens (in the 'thinking' field) are emitted in real-time.
+    """
     if not req.message or not req.message.strip():
         raise HTTPException(status_code=400, detail="Message is required")
 
@@ -217,8 +194,8 @@ async def chat(session_id: str, req: ChatRequest):
     context = load_context(workspace)
     history = load_history(workspace)
 
-    # Build the agent with page context as instructions
-    instructions = (
+    # Build system prompt with page context
+    system_prompt = (
         "You are a helpful assistant that answers questions about the following page content. "
         "Be concise and accurate. When referencing the content, be specific. "
         "If the user asks you to summarize, provide a clear structured summary.\n\n"
@@ -227,114 +204,88 @@ async def chat(session_id: str, req: ChatRequest):
         "--- END PAGE CONTENT ---"
     )
 
-    # Use per-request model if specified, otherwise fall back to default
-    chat_model = model
-    if req.model and req.model != MODEL_NAME:
-        chat_model = OpenAIChatModel(
-            model_name=req.model,
-            provider=OllamaProvider(base_url=OLLAMA_BASE_URL),
-        )
+    # Build messages array for Ollama
+    messages = [{"role": "system", "content": system_prompt}]
 
-    agent = Agent(model=chat_model, instructions=instructions)
-
-    # Build message history for PydanticAI
-    # We need to convert our stored history to PydanticAI message format
-    # For simplicity, we'll use the agent with a combined prompt that includes history
-    history_text = ""
+    # Add conversation history (trimmed to last N turns)
     if history:
-        # Trim to last N turns
         recent = history[-MAX_HISTORY_TURNS * 2 :]
         for entry in recent:
-            role_label = "User" if entry["role"] == "user" else "Assistant"
-            history_text += f"{role_label}: {entry['content']}\n\n"
+            messages.append({"role": entry["role"], "content": entry["content"]})
 
-    full_prompt = ""
-    if history_text:
-        full_prompt = (
-            "Previous conversation:\n"
-            + history_text
-            + "User: "
-            + req.message
-            + "\n\nRespond to the user's latest message."
-        )
-    else:
-        full_prompt = req.message
+    messages.append({"role": "user", "content": req.message})
+
+    chat_model_name = req.model or MODEL_NAME
+    ollama_chat_url = get_ollama_native_url() + "/api/chat"
 
     async def generate_stream():
         full_response = ""
-        in_think = False
-        buffer = ""
-        OPEN_TAG = "<think>"
-        CLOSE_TAG = "</think>"
+        was_thinking = False
 
         try:
-            async with agent.run_stream(full_prompt) as result:
-                async for chunk in result.stream_text(delta=True):
-                    full_response += chunk
-                    buffer += chunk
+            async with httpx.AsyncClient(timeout=None) as client:
+                async with client.stream(
+                    "POST",
+                    ollama_chat_url,
+                    json={
+                        "model": chat_model_name,
+                        "messages": messages,
+                        "stream": True,
+                    },
+                ) as resp:
+                    if resp.status_code != 200:
+                        body = await resp.aread()
+                        raise Exception(
+                            f"Ollama error ({resp.status_code}): {body.decode()}"
+                        )
 
-                    while buffer:
-                        if in_think:
-                            close_idx = buffer.find(CLOSE_TAG)
-                            if close_idx != -1:
-                                think_text = buffer[:close_idx]
-                                if think_text:
-                                    yield f"data: {json.dumps({'think': think_text})}\n\n"
-                                buffer = buffer[close_idx + len(CLOSE_TAG) :]
-                                in_think = False
-                                yield f"data: {json.dumps({'think_end': True})}\n\n"
-                            else:
-                                pl = _partial_tag_len(buffer, CLOSE_TAG)
-                                if pl:
-                                    safe = buffer[:-pl]
-                                    if safe:
-                                        yield f"data: {json.dumps({'think': safe})}\n\n"
-                                    buffer = buffer[-pl:]
-                                    break
-                                else:
-                                    yield f"data: {json.dumps({'think': buffer})}\n\n"
-                                    buffer = ""
-                        else:
-                            open_idx = buffer.find(OPEN_TAG)
-                            if open_idx != -1:
-                                before = buffer[:open_idx]
-                                if before:
-                                    yield f"data: {json.dumps({'token': before})}\n\n"
-                                buffer = buffer[open_idx + len(OPEN_TAG) :]
-                                in_think = True
+                    async for line in resp.aiter_lines():
+                        if not line.strip():
+                            continue
+                        try:
+                            chunk = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+
+                        msg = chunk.get("message", {})
+                        thinking = msg.get("thinking", "")
+                        content = msg.get("content", "")
+                        done = chunk.get("done", False)
+
+                        # Thinking tokens
+                        if thinking:
+                            if not was_thinking:
                                 yield f"data: {json.dumps({'think_start': True})}\n\n"
-                            else:
-                                pl = _partial_tag_len(buffer, OPEN_TAG)
-                                if pl:
-                                    safe = buffer[:-pl]
-                                    if safe:
-                                        yield f"data: {json.dumps({'token': safe})}\n\n"
-                                    buffer = buffer[-pl:]
-                                    break
-                                else:
-                                    yield f"data: {json.dumps({'token': buffer})}\n\n"
-                                    buffer = ""
+                                was_thinking = True
+                            yield f"data: {json.dumps({'think': thinking})}\n\n"
 
-            # Flush remaining buffer
-            if buffer:
-                if in_think:
-                    yield f"data: {json.dumps({'think': buffer})}\n\n"
-                    yield f"data: {json.dumps({'think_end': True})}\n\n"
-                else:
-                    yield f"data: {json.dumps({'token': buffer})}\n\n"
+                        # Response tokens
+                        if content:
+                            if was_thinking:
+                                yield f"data: {json.dumps({'think_end': True})}\n\n"
+                                was_thinking = False
+                            full_response += content
+                            yield f"data: {json.dumps({'token': content})}\n\n"
+
+                        if done:
+                            break
+
+            # Close any open thinking block
+            if was_thinking:
+                yield f"data: {json.dumps({'think_end': True})}\n\n"
 
             yield "data: [DONE]\n\n"
 
-            # Save to history (strip thinking from saved response)
-            clean_response = re.sub(
-                r"<think>.*?</think>", "", full_response, flags=re.DOTALL
-            ).strip()
+            # Save to history (response only, not thinking)
             history.append({"role": "user", "content": req.message})
-            history.append({"role": "assistant", "content": clean_response})
+            history.append({"role": "assistant", "content": full_response})
             save_history(workspace, history)
 
         except Exception as e:
             logger.error(f"Chat error in session {session_id}: {e}", exc_info=True)
+            # Close any open thinking block before error
+            if was_thinking:
+                yield f"data: {json.dumps({'think_end': True})}\n\n"
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
             yield "data: [DONE]\n\n"
 
