@@ -13,6 +13,23 @@
   let chatServerUrl = 'http://localhost:8882';
   let isChatStreaming = false;
 
+  // Configure marked for markdown rendering
+  if (typeof marked !== 'undefined') {
+    marked.setOptions({ breaks: true, gfm: true });
+  }
+
+  function renderMarkdown(text) {
+    if (!text) return '';
+    try {
+      return marked.parse(text);
+    } catch (_) {
+      // Fallback: escape HTML and preserve newlines
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+  }
+
   // ─── DOM References ───────────────────────────────────────────────
 
   const $ = (id) => document.getElementById(id);
@@ -53,6 +70,7 @@
     els.chatLabel       = $('chatLabel');
     els.chatWelcome     = $('chatWelcome');
     els.modelSelect     = $('modelSelect');
+    els.newChatBtn      = $('newChatBtn');
   }
 
   // ─── Formatting ───────────────────────────────────────────────────
@@ -309,17 +327,40 @@
         }
       }
 
-      if (!result || !result.text || result.source === 'pdf') return;
+      if (!result) return;
 
       const pageUrl = tabs[0].url || '';
       const pageTitle = tabs[0].title || '';
+      let pageText = result.text || '';
+
+      // For PDFs, extract text via background/offscreen pipeline
+      if (result.source === 'pdf' && result.pdfUrl) {
+        try {
+          const pdfResult = await chrome.runtime.sendMessage({
+            type: 'extractPdfForChat',
+            url: result.pdfUrl
+          });
+          if (pdfResult && pdfResult.text) {
+            pageText = pdfResult.text;
+          } else {
+            els.chatWelcome.textContent = 'PDF detected but text extraction failed. Use the PDF reader for TTS.';
+            return;
+          }
+        } catch (e) {
+          console.warn('PDF extraction for chat failed:', e);
+          els.chatWelcome.textContent = 'PDF detected but text extraction failed.';
+          return;
+        }
+      }
+
+      if (!pageText) return;
 
       // Create session with chat server
       const resp = await fetch(chatServerUrl + '/sessions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: result.text,
+          content: pageText,
           url: pageUrl,
           title: pageTitle
         })
@@ -328,7 +369,8 @@
       if (resp.ok) {
         const data = await resp.json();
         chatSessionId = data.session_id;
-        els.chatWelcome.textContent = 'Page loaded: ' + (pageTitle || 'Untitled') + '. Ask anything about it.';
+        const label = result.source === 'pdf' ? 'PDF loaded' : 'Page loaded';
+        els.chatWelcome.textContent = label + ': ' + (pageTitle || 'Untitled') + '. Ask anything about it.';
       }
     } catch (e) {
       console.warn('Failed to init chat session:', e);
@@ -351,6 +393,12 @@
     const aiMsgEl = appendMessage('ai', '', true);
     const contentEl = aiMsgEl.querySelector('.msg-content');
     const cursor = aiMsgEl.querySelector('.cursor');
+
+    // Thinking state
+    let thinkEl = null;
+    let thinkContentEl = null;
+    let thinkStartTime = null;
+    let fullThink = '';
 
     try {
       const resp = await fetch(chatServerUrl + '/sessions/' + chatSessionId + '/chat', {
@@ -382,15 +430,57 @@
             if (data === '[DONE]') continue;
             try {
               const parsed = JSON.parse(data);
-              if (parsed.token) {
-                fullText += parsed.token;
-                contentEl.textContent = fullText;
+
+              if (parsed.think_start) {
+                thinkStartTime = Date.now();
+                fullThink = '';
+                thinkEl = document.createElement('details');
+                thinkEl.className = 'think-block streaming';
+                thinkEl.open = true;
+                const summary = document.createElement('summary');
+                summary.innerHTML = '<span class="think-spinner"></span><span class="chevron">&#9654;</span> Thinking\u2026';
+                thinkContentEl = document.createElement('div');
+                thinkContentEl.className = 'think-content';
+                thinkEl.appendChild(summary);
+                thinkEl.appendChild(thinkContentEl);
+                aiMsgEl.insertBefore(thinkEl, contentEl);
                 scrollToBottom();
+
+              } else if (parsed.think) {
+                fullThink += parsed.think;
+                if (thinkContentEl) {
+                  thinkContentEl.textContent = fullThink;
+                  thinkContentEl.scrollTop = thinkContentEl.scrollHeight;
+                }
+                scrollToBottom();
+
+              } else if (parsed.think_end) {
+                if (thinkEl) {
+                  thinkEl.classList.remove('streaming');
+                  const elapsed = thinkStartTime
+                    ? Math.round((Date.now() - thinkStartTime) / 1000)
+                    : 0;
+                  const label = elapsed < 1 ? '<1s' : elapsed + 's';
+                  const summary = thinkEl.querySelector('summary');
+                  summary.innerHTML = '<span class="chevron">&#9654;</span> Thought for ' + label;
+                  thinkEl.open = false;
+                }
+
+              } else if (parsed.token) {
+                fullText += parsed.token;
+                contentEl.innerHTML = renderMarkdown(fullText);
+                scrollToBottom();
+
+              } else if (parsed.error) {
+                throw new Error(parsed.error);
               }
-            } catch (_) {
+            } catch (parseErr) {
+              if (parseErr.message && !parseErr.message.startsWith('Unexpected')) {
+                throw parseErr;
+              }
               // Not JSON, treat as raw text
               fullText += data;
-              contentEl.textContent = fullText;
+              contentEl.innerHTML = renderMarkdown(fullText);
               scrollToBottom();
             }
           }
@@ -400,9 +490,26 @@
       // Finalize message
       aiMsgEl.classList.remove('streaming');
       if (cursor) cursor.remove();
-      contentEl.textContent = fullText;
+      contentEl.innerHTML = renderMarkdown(fullText);
 
-      // Add read-aloud button
+      // If thinking never ended (model didn't close tag), finalize it
+      if (thinkEl && thinkEl.classList.contains('streaming')) {
+        thinkEl.classList.remove('streaming');
+        const elapsed = thinkStartTime
+          ? Math.round((Date.now() - thinkStartTime) / 1000)
+          : 0;
+        const label = elapsed < 1 ? '<1s' : elapsed + 's';
+        const summary = thinkEl.querySelector('summary');
+        summary.innerHTML = '<span class="chevron">&#9654;</span> Thought for ' + label;
+        thinkEl.open = false;
+      }
+
+      // Remove thinking block if it was empty
+      if (thinkEl && !fullThink.trim()) {
+        thinkEl.remove();
+      }
+
+      // Add read-aloud button (only for the response, not thinking)
       addReadAloudButton(aiMsgEl, fullText);
 
     } catch (e) {
@@ -410,6 +517,13 @@
       if (cursor) cursor.remove();
       contentEl.textContent = 'Error: ' + e.message;
       contentEl.style.color = '#e74c3c';
+      // Clean up thinking block on error
+      if (thinkEl && thinkEl.classList.contains('streaming')) {
+        thinkEl.classList.remove('streaming');
+        const summary = thinkEl.querySelector('summary');
+        summary.innerHTML = '<span class="chevron">&#9654;</span> Thinking (interrupted)';
+        thinkEl.open = false;
+      }
     } finally {
       isChatStreaming = false;
       els.sendBtn.disabled = false;
@@ -577,6 +691,21 @@
     els.modelSelect.addEventListener('change', () => {
       chrome.storage.local.set({ chatModel: els.modelSelect.value });
     });
+
+    els.newChatBtn.addEventListener('click', () => {
+      resetChat();
+      checkChatHealth().then(healthy => {
+        if (healthy) initChatSession();
+      });
+    });
+  }
+
+  function resetChat() {
+    chatSessionId = null;
+    isChatStreaming = false;
+    els.chatMessages.innerHTML = '<div class="msg system" id="chatWelcome">Loading page context\u2026</div>';
+    els.chatWelcome = $('chatWelcome');
+    els.sendBtn.disabled = true;
   }
 
   // ─── Message Listener ─────────────────────────────────────────────

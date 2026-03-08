@@ -6,6 +6,7 @@ Page context is saved as files in per-session workspace directories.
 
 import json
 import os
+import re
 import uuid
 import logging
 from pathlib import Path
@@ -72,6 +73,17 @@ class ChatRequest(BaseModel):
 class HistoryEntry(BaseModel):
     role: str
     content: str
+
+
+# ─── Think Tag Parsing ───────────────────────────────────────────────
+
+
+def _partial_tag_len(text: str, tag: str) -> int:
+    """Return length of a partial tag prefix match at end of text, or 0."""
+    for i in range(min(len(tag) - 1, len(text)), 0, -1):
+        if text.endswith(tag[:i]):
+            return i
+    return 0
 
 
 # ─── Workspace Helpers ───────────────────────────────────────────────
@@ -250,17 +262,75 @@ async def chat(session_id: str, req: ChatRequest):
 
     async def generate_stream():
         full_response = ""
+        in_think = False
+        buffer = ""
+        OPEN_TAG = "<think>"
+        CLOSE_TAG = "</think>"
+
         try:
             async with agent.run_stream(full_prompt) as result:
                 async for chunk in result.stream_text(delta=True):
                     full_response += chunk
-                    yield f"data: {json.dumps({'token': chunk})}\n\n"
+                    buffer += chunk
+
+                    while buffer:
+                        if in_think:
+                            close_idx = buffer.find(CLOSE_TAG)
+                            if close_idx != -1:
+                                think_text = buffer[:close_idx]
+                                if think_text:
+                                    yield f"data: {json.dumps({'think': think_text})}\n\n"
+                                buffer = buffer[close_idx + len(CLOSE_TAG) :]
+                                in_think = False
+                                yield f"data: {json.dumps({'think_end': True})}\n\n"
+                            else:
+                                pl = _partial_tag_len(buffer, CLOSE_TAG)
+                                if pl:
+                                    safe = buffer[:-pl]
+                                    if safe:
+                                        yield f"data: {json.dumps({'think': safe})}\n\n"
+                                    buffer = buffer[-pl:]
+                                    break
+                                else:
+                                    yield f"data: {json.dumps({'think': buffer})}\n\n"
+                                    buffer = ""
+                        else:
+                            open_idx = buffer.find(OPEN_TAG)
+                            if open_idx != -1:
+                                before = buffer[:open_idx]
+                                if before:
+                                    yield f"data: {json.dumps({'token': before})}\n\n"
+                                buffer = buffer[open_idx + len(OPEN_TAG) :]
+                                in_think = True
+                                yield f"data: {json.dumps({'think_start': True})}\n\n"
+                            else:
+                                pl = _partial_tag_len(buffer, OPEN_TAG)
+                                if pl:
+                                    safe = buffer[:-pl]
+                                    if safe:
+                                        yield f"data: {json.dumps({'token': safe})}\n\n"
+                                    buffer = buffer[-pl:]
+                                    break
+                                else:
+                                    yield f"data: {json.dumps({'token': buffer})}\n\n"
+                                    buffer = ""
+
+            # Flush remaining buffer
+            if buffer:
+                if in_think:
+                    yield f"data: {json.dumps({'think': buffer})}\n\n"
+                    yield f"data: {json.dumps({'think_end': True})}\n\n"
+                else:
+                    yield f"data: {json.dumps({'token': buffer})}\n\n"
 
             yield "data: [DONE]\n\n"
 
-            # Save to history
+            # Save to history (strip thinking from saved response)
+            clean_response = re.sub(
+                r"<think>.*?</think>", "", full_response, flags=re.DOTALL
+            ).strip()
             history.append({"role": "user", "content": req.message})
-            history.append({"role": "assistant", "content": full_response})
+            history.append({"role": "assistant", "content": clean_response})
             save_history(workspace, history)
 
         except Exception as e:

@@ -269,6 +269,60 @@
     }
     .error-banner.visible { display: block; }
 
+    /* ─── Thinking Block (collapsible) ─── */
+    .think-block {
+      margin-bottom: 6px;
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    .think-block summary {
+      font-size: 11px;
+      color: #999;
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 8px;
+      background: rgba(233, 69, 96, 0.06);
+      border-radius: 6px;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .think-block summary::-webkit-details-marker { display: none; }
+    .think-block summary .chevron {
+      display: inline-block;
+      font-size: 8px;
+      transition: transform 0.2s;
+      flex-shrink: 0;
+    }
+    .think-block[open] summary .chevron { transform: rotate(90deg); }
+    .think-block summary:hover { color: #e94560; }
+    .think-block.streaming summary .think-spinner {
+      width: 10px; height: 10px;
+      border: 1.5px solid rgba(233, 69, 96, 0.2);
+      border-radius: 50%;
+      border-top-color: #e94560;
+      animation: spin 0.8s linear infinite;
+      flex-shrink: 0;
+    }
+    .think-content {
+      background: rgba(233, 69, 96, 0.05);
+      border-left: 2px solid rgba(233, 69, 96, 0.25);
+      padding: 8px 10px;
+      margin-top: 4px;
+      border-radius: 0 6px 6px 0;
+      font-size: 12px;
+      color: #888;
+      line-height: 1.5;
+      max-height: 200px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .think-content::-webkit-scrollbar { width: 4px; }
+    .think-content::-webkit-scrollbar-track { background: transparent; }
+    .think-content::-webkit-scrollbar-thumb { background: rgba(233, 69, 96, 0.2); border-radius: 2px; }
+
     /* ─── Chat Section (bottom, fills remaining space) ─── */
     .chat-section {
       flex: 1;
@@ -343,7 +397,6 @@
       font-size: 13px;
       line-height: 1.5;
       word-wrap: break-word;
-      white-space: pre-wrap;
     }
     .msg.user {
       align-self: flex-end;
@@ -358,7 +411,72 @@
       border: 1px solid #0f3460;
       border-bottom-left-radius: 3px;
     }
-    .msg.ai .msg-content { margin-bottom: 4px; }
+    .msg.ai .msg-content { margin-bottom: 4px; overflow-wrap: break-word; }
+    .msg.user { white-space: pre-wrap; }
+
+    /* Rendered markdown inside AI messages */
+    .msg.ai .msg-content h1,
+    .msg.ai .msg-content h2,
+    .msg.ai .msg-content h3 {
+      font-size: 13px;
+      font-weight: 700;
+      color: #e6e6e6;
+      margin: 8px 0 4px;
+    }
+    .msg.ai .msg-content h1 { font-size: 15px; }
+    .msg.ai .msg-content h2 { font-size: 14px; }
+    .msg.ai .msg-content p { margin: 4px 0; }
+    .msg.ai .msg-content ul,
+    .msg.ai .msg-content ol {
+      margin: 4px 0;
+      padding-left: 20px;
+    }
+    .msg.ai .msg-content li { margin: 2px 0; }
+    .msg.ai .msg-content li > p { margin: 0; }
+    .msg.ai .msg-content code {
+      background: rgba(255, 255, 255, 0.08);
+      padding: 1px 5px;
+      border-radius: 3px;
+      font-size: 12px;
+      font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    }
+    .msg.ai .msg-content pre {
+      background: rgba(0, 0, 0, 0.3);
+      padding: 8px 10px;
+      border-radius: 6px;
+      overflow-x: auto;
+      margin: 6px 0;
+    }
+    .msg.ai .msg-content pre code {
+      background: none;
+      padding: 0;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .msg.ai .msg-content blockquote {
+      border-left: 3px solid #0f3460;
+      padding: 2px 10px;
+      margin: 4px 0;
+      color: #aaa;
+    }
+    .msg.ai .msg-content strong { color: #f0f0f0; }
+    .msg.ai .msg-content a { color: #e94560; text-decoration: none; }
+    .msg.ai .msg-content a:hover { text-decoration: underline; }
+    .msg.ai .msg-content table {
+      border-collapse: collapse;
+      margin: 6px 0;
+      font-size: 12px;
+      width: 100%;
+    }
+    .msg.ai .msg-content th,
+    .msg.ai .msg-content td {
+      border: 1px solid #0f3460;
+      padding: 4px 8px;
+      text-align: left;
+    }
+    .msg.ai .msg-content th { background: rgba(15, 52, 96, 0.5); font-weight: 600; }
+    .msg.ai .msg-content > *:first-child { margin-top: 0; }
+    .msg.ai .msg-content > *:last-child { margin-bottom: 0; }
     .msg.ai .msg-actions {
       display: flex;
       align-items: center;
@@ -461,6 +579,25 @@
       cursor: pointer;
     }
     .footer-bar a:hover { color: #e94560; }
+
+    /* Refresh / new chat button */
+    .btn-new-chat {
+      background: none;
+      border: 1px solid #0f3460;
+      color: #888;
+      border-radius: 4px;
+      width: 24px; height: 24px;
+      cursor: pointer;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+      flex-shrink: 0;
+      padding: 0;
+    }
+    .btn-new-chat:hover { color: #e94560; border-color: #e94560; }
+    .btn-new-chat svg { width: 14px; height: 14px; fill: currentColor; }
   </style>
 </head>
 <body>
@@ -533,6 +670,9 @@
   <div class="chat-section">
     <div class="chat-header">
       <h2>Chat</h2>
+      <button class="btn-new-chat" id="newChatBtn" title="New chat (reload page context)">
+        <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+      </button>
       <select class="model-select" id="modelSelect" title="Select LLM model">
         <option value="">Loading models...</option>
       </select>
@@ -556,6 +696,7 @@
     <a id="settingsLink">Settings</a>
   </div>
 
+  <script src="lib/marked.min.js"></script>
   <script src="utils/audioPlayer.js"></script>
   <script src="constants.js"></script>
   <script src="sidepanel.js"></script>

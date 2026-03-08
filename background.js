@@ -578,6 +578,35 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .catch(() => sendResponse({ healthy: false }));
       return true;
 
+    case 'extractPdfForChat':
+      (async () => {
+        try {
+          const response = await fetch(message.url);
+          if (!response.ok) throw new Error(`Failed to fetch PDF: ${response.status}`);
+          const arrayBuffer = await response.arrayBuffer();
+          await ensureOffscreen();
+          const result = await sendToOffscreen({
+            type: 'extractPdfText',
+            pdfData: Array.from(new Uint8Array(arrayBuffer)),
+            pageStart: 1,
+            pageEnd: null
+          });
+          if (result && result.error) throw new Error(result.error);
+          if (!result || !result.result || !result.result.pages) {
+            throw new Error('Failed to extract text from PDF');
+          }
+          let text = result.result.pages
+            .map(p => p.text)
+            .filter(t => t && t.trim().length > 0)
+            .join(' ');
+          sendResponse({ text: text });
+        } catch (e) {
+          console.error('extractPdfForChat error:', e);
+          sendResponse({ text: null, error: e.message });
+        }
+      })();
+      return true;
+
     // ─── Forwarded from offscreen ───
     case 'chunkPlaybackEnded':
       if (message.chunkIndex !== undefined) {
