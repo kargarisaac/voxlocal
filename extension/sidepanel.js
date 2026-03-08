@@ -8,6 +8,16 @@
   let audioPlayer = null;
   let seekUpdateInterval = null;
 
+  // Inline TTS player for AI chat responses (independent from page TTS)
+  const inlinePlayer = {
+    audio: null,
+    abortController: null,
+    activeBtn: null,
+    chunks: [],
+    currentChunk: -1,
+    totalChunks: 0
+  };
+
   // Chat state
   let chatSessionId = null;
   let chatServerUrl = 'http://localhost:8882';
@@ -538,8 +548,8 @@
         thinkEl.remove();
       }
 
-      // Add read-aloud button (only for the response, not thinking)
-      addReadAloudButton(aiMsgEl, fullText);
+      // Add action buttons (read aloud + copy)
+      addMessageActions(aiMsgEl, fullText);
       saveTabSession();
 
     } catch (e) {
@@ -583,42 +593,180 @@
     return msgEl;
   }
 
-  function addReadAloudButton(msgEl, text) {
+  function addMessageActions(msgEl, text) {
     if (!text || text.trim().length === 0) return;
 
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'msg-actions';
 
-    const btn = document.createElement('button');
-    btn.className = 'msg-action-btn';
-    btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg> Read aloud';
-    btn.addEventListener('click', () => {
-      readTextAloud(text);
-    });
+    // Read aloud / stop button
+    const readBtn = document.createElement('button');
+    readBtn.className = 'msg-action-btn read-aloud-btn';
+    readBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg> Read aloud';
+    readBtn.addEventListener('click', () => handleInlineReadAloud(text, readBtn));
 
-    actionsDiv.appendChild(btn);
+    // Copy button
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'msg-action-btn copy-btn';
+    copyBtn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg> Copy';
+    copyBtn.addEventListener('click', () => copyMessageText(text, copyBtn));
+
+    actionsDiv.appendChild(readBtn);
+    actionsDiv.appendChild(copyBtn);
     msgEl.appendChild(actionsDiv);
   }
 
-  async function readTextAloud(text) {
-    clearError();
+  // ─── Inline TTS (independent from page reader) ────────────────────
+
+  async function handleInlineReadAloud(text, btn) {
+    // If this button is already active, stop playback
+    if (btn === inlinePlayer.activeBtn) {
+      stopInlinePlayback();
+      return;
+    }
+
+    // Stop any other inline playback (page TTS is independent)
+    stopInlinePlayback();
+
     const stored = await getSettings();
-    const settings = {
-      ...stored,
-      voice: els.voice.value,
-      speed: parseFloat(els.speed.value)
-    };
-    await saveVoiceAndSpeed();
+    const voice = els.voice.value || stored.voice || 'af_heart';
+    const speed = parseFloat(els.speed.value) || stored.speed || 1.0;
+    const serverUrl = stored.serverUrl || DEFAULT_SETTINGS.serverUrl;
 
-    // Send text directly to background for TTS
-    chrome.runtime.sendMessage({
-      type: 'readText',
-      text: text,
-      settings: settings
-    });
+    // Process text for TTS
+    let processed = TextProcessor.process(text);
+    if (!processed || processed.trim().length === 0) return;
 
-    updateUI('loading', 0, 0);
-    startSeekUpdates();
+    const chunks = TextProcessor.chunkText(processed, stored.maxChunkSize || 500);
+    if (chunks.length === 0) return;
+
+    inlinePlayer.activeBtn = btn;
+    inlinePlayer.chunks = chunks;
+    inlinePlayer.totalChunks = chunks.length;
+    inlinePlayer.currentChunk = 0;
+    inlinePlayer.abortController = new AbortController();
+
+    setInlineBtnState(btn, 'loading');
+    playInlineChunk(0, voice, speed, serverUrl, btn);
+  }
+
+  async function playInlineChunk(index, voice, speed, serverUrl, btn) {
+    if (index >= inlinePlayer.totalChunks) {
+      resetInlineBtn(btn);
+      inlinePlayer.activeBtn = null;
+      return;
+    }
+    if (btn !== inlinePlayer.activeBtn) return; // stale
+
+    inlinePlayer.currentChunk = index;
+
+    try {
+      const resp = await fetch(serverUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'audio/mpeg, audio/wav, audio/*'
+        },
+        body: JSON.stringify({
+          model: 'kokoro',
+          voice: voice,
+          input: inlinePlayer.chunks[index],
+          speed: speed,
+          stream: false,
+          response_format: 'mp3'
+        }),
+        signal: inlinePlayer.abortController.signal
+      });
+
+      if (!resp.ok) throw new Error('TTS error (' + resp.status + ')');
+
+      const blob = await resp.blob();
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      inlinePlayer.audio = audio;
+
+      audio.onplay = () => setInlineBtnState(btn, 'playing');
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (btn !== inlinePlayer.activeBtn) return;
+        const next = index + 1;
+        if (next < inlinePlayer.totalChunks) {
+          setInlineBtnState(btn, 'loading');
+          playInlineChunk(next, voice, speed, serverUrl, btn);
+        } else {
+          resetInlineBtn(btn);
+          inlinePlayer.activeBtn = null;
+        }
+      };
+      audio.onerror = () => {
+        URL.revokeObjectURL(url);
+        showError('Audio playback failed');
+        resetInlineBtn(btn);
+        inlinePlayer.activeBtn = null;
+      };
+
+      audio.play().catch(err => {
+        showError('Could not play audio');
+        resetInlineBtn(btn);
+        inlinePlayer.activeBtn = null;
+      });
+    } catch (err) {
+      if (err.name === 'AbortError') return;
+      showError('TTS failed: ' + err.message);
+      resetInlineBtn(btn);
+      inlinePlayer.activeBtn = null;
+    }
+  }
+
+  function stopInlinePlayback() {
+    if (inlinePlayer.abortController) {
+      inlinePlayer.abortController.abort();
+      inlinePlayer.abortController = null;
+    }
+    if (inlinePlayer.audio) {
+      inlinePlayer.audio.pause();
+      inlinePlayer.audio.src = '';
+      inlinePlayer.audio = null;
+    }
+    if (inlinePlayer.activeBtn) {
+      resetInlineBtn(inlinePlayer.activeBtn);
+      inlinePlayer.activeBtn = null;
+    }
+    inlinePlayer.chunks = [];
+    inlinePlayer.currentChunk = -1;
+    inlinePlayer.totalChunks = 0;
+  }
+
+  function setInlineBtnState(btn, state) {
+    if (state === 'loading') {
+      btn.innerHTML = '<span class="inline-spinner"></span> Loading\u2026';
+      btn.classList.add('loading');
+      btn.classList.remove('playing');
+    } else if (state === 'playing') {
+      btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6h12v12H6z"/></svg> Stop';
+      btn.classList.add('playing');
+      btn.classList.remove('loading');
+    }
+  }
+
+  function resetInlineBtn(btn) {
+    btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z"/></svg> Read aloud';
+    btn.classList.remove('playing', 'loading');
+  }
+
+  async function copyMessageText(text, btn) {
+    try {
+      await navigator.clipboard.writeText(text);
+      const original = btn.innerHTML;
+      btn.innerHTML = '<svg viewBox="0 0 24 24"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg> Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => {
+        btn.innerHTML = original;
+        btn.classList.remove('copied');
+      }, 1500);
+    } catch (_) {
+      showError('Failed to copy text');
+    }
   }
 
   function scrollToBottom() {
@@ -640,23 +788,30 @@
 
   function setupTTSListeners() {
     els.playBtn.addEventListener('click', async () => {
+      console.log('[play] clicked');
       clearError();
+      console.log('[play] getting state…');
       const stateInfo = await audioPlayer.getState();
+      console.log('[play] state:', stateInfo.state);
       if (stateInfo.state === 'paused') {
         audioPlayer.resume();
         updateUI('playing', stateInfo.chunkIndex, stateInfo.totalChunks);
         startSeekUpdates();
         return;
       }
+      console.log('[play] getting settings…');
       const stored = await getSettings();
       const settings = {
         ...stored,
         voice: els.voice.value,
         speed: parseFloat(els.speed.value)
       };
+      console.log('[play] saving voice/speed…');
       await saveVoiceAndSpeed();
+      console.log('[play] calling startReading…');
       updateUI('loading', 0, 0);
       audioPlayer.startReading(settings);
+      console.log('[play] done, seek updates started');
       startSeekUpdates();
     });
 
@@ -776,10 +931,28 @@
     }
   }
 
+  // ─── Keep-alive Port ───────────────────────────────────────────────
+  // A persistent port prevents the MV3 service worker from going dormant.
+  // Without this, the worker sleeps after ~30s of idle and messages are lost.
+
+  function keepBackgroundAlive() {
+    try {
+      const port = chrome.runtime.connect({ name: 'keepalive' });
+      port.onDisconnect.addListener(() => {
+        // Service worker was terminated — reset AudioPlayer so init() re-creates offscreen
+        if (audioPlayer) audioPlayer.isInitialized = false;
+        setTimeout(keepBackgroundAlive, 1000);
+      });
+    } catch (e) {
+      setTimeout(keepBackgroundAlive, 1000);
+    }
+  }
+
   // ─── Init ─────────────────────────────────────────────────────────
 
   document.addEventListener('DOMContentLoaded', async () => {
     initEls();
+    keepBackgroundAlive();
 
     audioPlayer = new AudioPlayer();
     await audioPlayer.init();

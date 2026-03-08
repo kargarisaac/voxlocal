@@ -488,18 +488,30 @@
     .msg-action-btn {
       background: none;
       border: 1px solid #0f3460;
-      color: #aaa;
+      color: #888;
       border-radius: 4px;
-      padding: 3px 8px;
+      padding: 2px 7px;
       cursor: pointer;
       font-size: 10px;
       display: flex;
       align-items: center;
       gap: 4px;
-      transition: all 0.2s;
+      transition: all 0.15s;
+      line-height: 1;
     }
     .msg-action-btn:hover { color: #e94560; border-color: #e94560; }
-    .msg-action-btn svg { width: 12px; height: 12px; fill: currentColor; }
+    .msg-action-btn svg { width: 11px; height: 11px; fill: currentColor; flex-shrink: 0; }
+    .msg-action-btn.playing { color: #e94560; border-color: #e94560; }
+    .msg-action-btn.loading { color: #3498db; border-color: #3498db; pointer-events: none; }
+    .msg-action-btn.copied { color: #2ecc71; border-color: #2ecc71; }
+    .inline-spinner {
+      width: 10px; height: 10px;
+      border: 1.5px solid rgba(52, 152, 219, 0.25);
+      border-radius: 50%;
+      border-top-color: #3498db;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
 
     .msg.system {
       align-self: center;
@@ -698,6 +710,7 @@
 
   <script src="lib/marked.min.js"></script>
   <script src="utils/audioPlayer.js"></script>
+  <script src="utils/textProcessor.js"></script>
   <script src="constants.js"></script>
   <script src="sidepanel.js"></script>
 </body>

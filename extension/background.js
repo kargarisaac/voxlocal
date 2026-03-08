@@ -52,7 +52,9 @@ function getBackendUrls(settings) {
 // ─── Targeted Messaging ─────────────────────────────────────────────
 
 function sendToOffscreen(msg) {
-  return chrome.runtime.sendMessage({ ...msg, target: 'offscreen' }).catch(() => {});
+  return chrome.runtime.sendMessage({ ...msg, target: 'offscreen' }).catch((e) => {
+    console.warn('sendToOffscreen failed for', msg.type, ':', e.message);
+  });
 }
 
 // ─── State Broadcasting ─────────────────────────────────────────────
@@ -124,21 +126,27 @@ async function startChunkPlayback(chunkIndex) {
 
   currentChunkIndex = chunkIndex;
   broadcastState('loading');
+  console.log('[bg:chunk] playing chunk', chunkIndex, '/', totalChunks);
 
   try {
     let audio;
     if (prefetchedAudio.has(chunkIndex)) {
       audio = prefetchedAudio.get(chunkIndex);
       prefetchedAudio.delete(chunkIndex);
+      console.log('[bg:chunk] using prefetched');
     } else {
+      console.log('[bg:chunk] fetching TTS audio…');
       audio = await fetchAudioForChunk(
         chunks[chunkIndex],
         currentSettings,
         abortController ? abortController.signal : undefined
       );
+      console.log('[bg:chunk] TTS audio received, size:', audio.data.length);
     }
 
+    console.log('[bg:chunk] ensuring offscreen…');
     await ensureOffscreen();
+    console.log('[bg:chunk] sending to offscreen…');
     sendToOffscreen({
       type: 'playAudioChunk',
       audioData: audio.data,
@@ -148,11 +156,12 @@ async function startChunkPlayback(chunkIndex) {
     });
 
     broadcastState('playing');
+    console.log('[bg:chunk] playing, prefetching next…');
     prefetchNextChunk(chunkIndex + 1);
 
   } catch (error) {
     if (error.name === 'AbortError') return;
-    console.error('Error playing chunk:', error);
+    console.error('[bg:chunk] ERROR:', error);
     broadcastError(error.message);
   }
 }
@@ -178,12 +187,14 @@ async function prefetchNextChunk(nextIndex) {
 // ─── Reading Orchestration ───────────────────────────────────────────
 
 async function startReading(settings) {
+  console.log('[bg:startReading] begin');
   stopPlayback();
   readingId++;
   currentSettings = settings;
   abortController = new AbortController();
 
   const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+  console.log('[bg:startReading] tabs:', tabs.length);
   if (!tabs || tabs.length === 0) {
     broadcastError('No active tab found');
     return;
@@ -201,12 +212,14 @@ async function startReading(settings) {
 
   try {
     let result;
+    console.log('[bg:startReading] extracting text…');
     try {
       result = await chrome.tabs.sendMessage(activeTabId, {
         type: 'extractText',
         useReaderMode: settings.autoReaderMode !== false
       });
     } catch (e) {
+      console.log('[bg:startReading] injecting content script…');
       try {
         await chrome.scripting.executeScript({
           target: { tabId: activeTabId },
@@ -220,6 +233,8 @@ async function startReading(settings) {
         throw new Error('Cannot access this page. Try a different tab.');
       }
     }
+
+    console.log('[bg:startReading] text source:', result && result.source, 'length:', result && result.text && result.text.length);
 
     if (!result || (!result.text && result.source !== 'pdf')) {
       throw new Error('No text found on this page.');
@@ -242,6 +257,7 @@ async function startReading(settings) {
     const maxChunkSize = settings.maxChunkSize || 500;
     chunks = TextProcessor.chunkText(text, maxChunkSize);
     totalChunks = chunks.length;
+    console.log('[bg:startReading] chunks:', totalChunks);
 
     if (totalChunks === 0) {
       throw new Error('No text to read.');
@@ -251,7 +267,7 @@ async function startReading(settings) {
 
   } catch (error) {
     if (error.name === 'AbortError') return;
-    console.error('Error in startReading:', error);
+    console.error('[bg:startReading] ERROR:', error);
     broadcastError(error.message);
   }
 }
@@ -654,6 +670,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     default:
       return false;
+  }
+});
+
+// ─── Keep-alive Port ─────────────────────────────────────────────────
+// Side panel holds a persistent port to prevent the service worker from
+// going dormant. The port itself keeps the worker alive; no messages needed.
+
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name === 'keepalive') {
+    port.onDisconnect.addListener(() => {
+      // Side panel closed or reloaded — nothing to clean up
+    });
   }
 });
 

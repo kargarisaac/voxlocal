@@ -7,22 +7,55 @@ class AudioPlayer {
     this.isInitialized = false;
   }
 
+  /**
+   * Send a message to background with a timeout.
+   * Prevents the UI from hanging if the service worker is dormant or unresponsive.
+   */
+  _send(msg, fallback, timeoutMs = 4000) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        console.warn('AudioPlayer: timeout waiting for', msg.type);
+        resolve(fallback);
+      }, timeoutMs);
+      try {
+        chrome.runtime.sendMessage(msg, (response) => {
+          clearTimeout(timer);
+          if (chrome.runtime.lastError) {
+            console.warn('AudioPlayer:', msg.type, chrome.runtime.lastError.message);
+            resolve(fallback);
+          } else {
+            resolve(response === undefined ? fallback : response);
+          }
+        });
+      } catch (e) {
+        clearTimeout(timer);
+        console.warn('AudioPlayer: sendMessage error for', msg.type, e);
+        resolve(fallback);
+      }
+    });
+  }
+
   async init() {
     if (!this.isInitialized) {
-      await chrome.runtime.sendMessage({ type: 'setupOffscreen' });
+      await this._send({ type: 'setupOffscreen' }, { success: false }, 5000);
       this.isInitialized = true;
     }
   }
 
   /**
-   * Start reading text with given settings.
+   * Start reading the current page aloud.
    */
   async startReading(settings) {
     await this.init();
-    return chrome.runtime.sendMessage({
-      type: 'startReading',
-      settings: settings
-    });
+    chrome.runtime.sendMessage({ type: 'startReading', settings: settings });
+  }
+
+  /**
+   * Read arbitrary text aloud (e.g. AI chat responses).
+   */
+  async readText(text, settings) {
+    await this.init();
+    chrome.runtime.sendMessage({ type: 'readText', text: text, settings: settings });
   }
 
   /**
@@ -30,7 +63,7 @@ class AudioPlayer {
    */
   async readPdf(url, pageStart, pageEnd, settings) {
     await this.init();
-    return chrome.runtime.sendMessage({
+    chrome.runtime.sendMessage({
       type: 'readPdf',
       url: url,
       pageStart: pageStart,
@@ -60,44 +93,39 @@ class AudioPlayer {
   }
 
   async seek(time) {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage(
-        { type: 'seekInChunk', time: time },
-        (response) => resolve(response && response.success)
-      );
-    });
+    return this._send(
+      { type: 'seekInChunk', time: time },
+      { success: false }
+    ).then(r => r && r.success);
   }
 
   async getState() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'getPlayerState' }, (response) => {
-        resolve(response || { state: 'stopped', chunkIndex: 0, totalChunks: 0 });
-      });
-    });
+    return this._send(
+      { type: 'getPlayerState' },
+      { state: 'stopped', chunkIndex: 0, totalChunks: 0 }
+    );
   }
 
   async getTimeInfo() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'getTimeInfo' }, (response) => {
-        resolve(response ? response.timeInfo : null);
-      });
-    });
+    return this._send(
+      { type: 'getTimeInfo' },
+      { timeInfo: null }
+    ).then(r => r ? r.timeInfo : null);
   }
 
   async fetchVoices() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'fetchVoices' }, (response) => {
-        resolve(response ? response.voices : []);
-      });
-    });
+    return this._send(
+      { type: 'fetchVoices' },
+      { voices: [] },
+      8000
+    ).then(r => r ? r.voices : []);
   }
 
   async checkHealth() {
-    return new Promise((resolve) => {
-      chrome.runtime.sendMessage({ type: 'checkHealth' }, (response) => {
-        resolve(response || { healthy: false });
-      });
-    });
+    return this._send(
+      { type: 'checkHealth' },
+      { healthy: false }
+    );
   }
 }
 
