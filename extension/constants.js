@@ -18,12 +18,6 @@ const BACKENDS = {
     speechUrl: 'http://localhost:8880/v1/audio/speech',
     voicesUrl: 'http://localhost:8880/v1/audio/voices',
     healthUrl: 'http://localhost:8880/health'
-  },
-  kittentts: {
-    name: 'KittenTTS',
-    speechUrl: 'http://localhost:8881/v1/audio/speech',
-    voicesUrl: 'http://localhost:8881/v1/audio/voices',
-    healthUrl: 'http://localhost:8881/health'
   }
 };
 

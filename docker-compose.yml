@@ -16,21 +16,6 @@ services:
       - CORS_ENABLED=true
       - API_LOG_LEVEL=INFO
 
-  kittentts:
-    build:
-      context: ./servers/kittentts
-      dockerfile: Dockerfile
-    container_name: kittentts
-    restart: unless-stopped
-    ports:
-      - "8881:8881"
-    environment:
-      - HOST=0.0.0.0
-      - PORT=8881
-      - MODEL_NAME=KittenML/kitten-tts-mini-0.8
-    volumes:
-      - kittentts-cache:/home/appuser/.cache
-
   chat-server:
     build:
       context: ./servers/chat
@@ -51,5 +36,3 @@ services:
     volumes:
       - ${HOME}/.voxlocal/workspaces:/workspaces
 
-volumes:
-  kittentts-cache:

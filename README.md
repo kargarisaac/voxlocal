@@ -36,7 +36,7 @@ Browser read-aloud tools either send your content to external servers or sound r
 - **Thinking tokens** -- see the model's reasoning in real-time via a collapsible thinking block
 - **Model selector** -- pick any locally pulled Ollama model from the chat panel
 - **Side panel UI** -- TTS controls and chat live together in Chrome's side panel
-- **Two TTS backends** -- Kokoro-FastAPI (50+ voices, multi-language) or KittenTTS (lightweight, English)
+- **Kokoro TTS** -- 50+ voices, multi-language, powered by Kokoro-82M
 - **Markdown rendering** -- AI responses render with full markdown: headers, lists, code blocks, tables
 - **Gapless playback** -- sentence-level chunks with pre-fetching for smooth audio
 - **Read AI responses** -- click the speaker icon on any AI response to hear it read aloud
@@ -60,10 +60,8 @@ flowchart TB
         background -- audio chunks --> offscreen
     end
 
-    subgraph tts["TTS Servers - Docker"]
-        direction LR
+    subgraph tts["TTS Server - Docker"]
         kokoro["Kokoro-FastAPI<br/>localhost:8880"]
-        kitten["KittenTTS<br/>localhost:8881"]
     end
 
     subgraph chat["Chat Server - Docker"]
@@ -108,13 +106,9 @@ Key MV3 constraints that shaped the design:
 5. **Markdown** -- AI responses are rendered with marked.js (headers, lists, code blocks, tables)
 6. **Read aloud** -- each AI response has a speaker button that sends the text through the TTS pipeline
 
-### TTS backends
+### TTS backend
 
-Both expose an [OpenAI-compatible](https://platform.openai.com/docs/api-reference/audio/createSpeech) API.
-
-**Kokoro-FastAPI** (default, port 8880) wraps [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) in a FastAPI server with CPU inference via ONNX Runtime. 50+ voices, multi-language. Docker image: `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`.
-
-**KittenTTS** (port 8881) is a lightweight Python TTS library. We wrote a FastAPI wrapper (`servers/kittentts/`) exposing the same endpoints. 8 English voices, very lightweight.
+**Kokoro-FastAPI** (port 8880) wraps [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) in a FastAPI server with CPU inference via ONNX Runtime. 50+ voices, multi-language. Exposes an [OpenAI-compatible](https://platform.openai.com/docs/api-reference/audio/createSpeech) API. Docker image: `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4`.
 
 ### Chat backend
 
@@ -131,16 +125,15 @@ FastAPI server using direct **httpx** calls to **Ollama**'s native `/api/chat` e
 |---------|-------------|-----------------|---------|
 | [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) | OpenAI-compatible TTS server for Kokoro-82M | Docker container, port 8880 | Apache 2.0 |
 | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) | 82M parameter text-to-speech model | Used by Kokoro-FastAPI | Apache 2.0 |
-| [KittenTTS](https://github.com/KittenML/KittenTTS) | Lightweight TTS library (ONNX, CPU) | Wrapped in `servers/kittentts/` | MIT |
 | [Ollama](https://ollama.com/) | Local LLM runtime | Runs any model for chat | MIT |
 | [Mozilla Readability](https://github.com/mozilla/readability) | Article content extraction | Bundled as `extension/lib/readability.js` | Apache 2.0 |
 | [PDF.js](https://mozilla.github.io/pdf.js/) | PDF text extraction | Bundled as `extension/lib/pdf.min.mjs` (v4.10.38) | Apache 2.0 |
 | [marked](https://github.com/markedjs/marked) | Markdown parser | Bundled as `extension/lib/marked.min.js` (v15.0.7) | MIT |
-| [FastAPI](https://fastapi.tiangolo.com/) | Python web framework | Chat + KittenTTS server wrappers | MIT |
+| [FastAPI](https://fastapi.tiangolo.com/) | Python web framework | Chat server | MIT |
 
 ### Forked from
 
-Based on [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty. Voxlocal is a substantial rewrite adding the chat interface, thinking token streaming, model selection, markdown rendering, side panel UI, PDF support, Twitter extraction, KittenTTS backend, and gapless playback.
+Based on [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty. Voxlocal is a substantial rewrite adding the chat interface, thinking token streaming, model selection, markdown rendering, side panel UI, PDF support, Twitter extraction, and gapless playback.
 
 ## Quick start
 
@@ -167,9 +160,6 @@ cd voxlocal
 mkdir -p ~/.voxlocal/workspaces
 
 # Start TTS + chat server
-docker compose up -d kokoro-tts chat-server
-
-# Or start everything (including KittenTTS)
 docker compose up -d
 ```
 
@@ -206,25 +196,10 @@ curl http://localhost:8882/health
 
 **Keyboard shortcuts:** `Alt+Shift+R` to read/pause, `Alt+Shift+S` to stop.
 
-### Switching the TTS backend
-
-Voxlocal ships with two TTS backends. **Kokoro-FastAPI** is the default (50+ voices, multi-language). **KittenTTS** is a lighter alternative (8 English voices).
-
-1. Make sure both services are running:
-   ```bash
-   docker compose up -d kokoro-tts kittentts
-   ```
-2. Open **Settings** -- click the "Settings" link in the side panel footer, or go to `chrome://extensions` > Voxlocal > Options.
-3. Change the **Backend** dropdown from "Kokoro TTS" to "KittenTTS". The server URL and voice list update automatically.
-4. Pick a voice from the new voice list and click **Save**.
-
-The extension auto-detects which backends are online and shows their status in the side panel. You can switch back anytime by changing the dropdown in Settings.
-
-To list all available voices for either backend:
+### Listing available voices
 
 ```bash
-curl http://localhost:8880/v1/audio/voices   # Kokoro
-curl http://localhost:8881/v1/audio/voices   # KittenTTS
+curl http://localhost:8880/v1/audio/voices
 ```
 
 ## Configuration
@@ -255,7 +230,6 @@ Open **Settings** (link in side panel footer, or `chrome://extensions` > Voxloca
 | Service | Port | Image / Build | Description |
 |---------|------|---------------|-------------|
 | `kokoro-tts` | 8880 | `ghcr.io/remsky/kokoro-fastapi-cpu:v0.2.4` | Kokoro TTS |
-| `kittentts` | 8881 | Built from `servers/kittentts/` | KittenTTS wrapper |
 | `chat-server` | 8882 | Built from `servers/chat/` | Chat server (Ollama streaming) |
 
 Ollama runs on the host (not Docker) and is accessed by the chat server via `host.docker.internal:11434`.
@@ -288,10 +262,6 @@ voxlocal/
       server.py                   FastAPI + direct Ollama streaming via httpx
       Dockerfile                  Python 3.12-slim
       requirements.txt            fastapi, uvicorn, pydantic, httpx
-    kittentts/
-      server.py                   FastAPI wrapper for KittenTTS
-      Dockerfile                  Python 3.12-slim + espeak-ng + ffmpeg
-      requirements.txt
   docker-compose.yml              All services
   .editorconfig                   Editor formatting rules
   CONTRIBUTING.md                 Contributor guide
@@ -351,7 +321,6 @@ MIT License. See [LICENSE](LICENSE).
 
 - [Kokoro-FastAPI](https://github.com/remsky/Kokoro-FastAPI) by remsky
 - [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) by hexgrad
-- [KittenTTS](https://github.com/KittenML/KittenTTS) by KittenML
 - [Ollama](https://ollama.com/) by the Ollama team
 - [marked](https://github.com/markedjs/marked) by the marked team
 - [local_tts_reader](https://github.com/phildougherty/local_tts_reader) by Phil Dougherty

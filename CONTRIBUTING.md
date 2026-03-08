@@ -21,7 +21,7 @@ Thanks for your interest in contributing!
 3. Server code lives in `servers/`. After editing, rebuild with:
 
    ```bash
-   docker compose up -d --build chat-server   # or kittentts
+   docker compose up -d --build chat-server
    ```
 
 ## Project layout
@@ -30,7 +30,6 @@ Thanks for your interest in contributing!
 extension/    Chrome extension (load unpacked from here)
 servers/
   chat/       FastAPI chat server (Ollama streaming)
-  kittentts/  FastAPI wrapper for KittenTTS
 ```
 
 ## Guidelines
