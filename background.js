@@ -14,6 +14,7 @@ let currentSettings = {};
 let prefetchedAudio = new Map(); // chunkIndex -> { data, mimeType }
 let activeTabId = null;
 let abortController = null;
+let readingId = 0; // Incremented on each new reading to ignore stale events
 
 // ─── Offscreen Document ──────────────────────────────────────────────
 
@@ -142,7 +143,8 @@ async function startChunkPlayback(chunkIndex) {
       type: 'playAudioChunk',
       audioData: audio.data,
       mimeType: audio.mimeType,
-      chunkIndex: chunkIndex
+      chunkIndex: chunkIndex,
+      readingId: readingId
     });
 
     broadcastState('playing');
@@ -177,6 +179,7 @@ async function prefetchNextChunk(nextIndex) {
 
 async function startReading(settings) {
   stopPlayback();
+  readingId++;
   currentSettings = settings;
   abortController = new AbortController();
 
@@ -258,6 +261,7 @@ async function startReading(settings) {
  */
 async function readText(text, settings) {
   stopPlayback();
+  readingId++;
   currentSettings = settings;
   abortController = new AbortController();
 
@@ -295,6 +299,7 @@ async function readText(text, settings) {
 
 async function readPdf(url, pageStart, pageEnd, settings) {
   stopPlayback();
+  readingId++;
   currentSettings = settings;
   abortController = new AbortController();
 
@@ -466,6 +471,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
 
   if (info.selectionText) {
     stopPlayback();
+    readingId++;
     currentSettings = settings;
     abortController = new AbortController();
     activeTabId = tab.id;
@@ -609,6 +615,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
     // ─── Forwarded from offscreen ───
     case 'chunkPlaybackEnded':
+      // Ignore stale events from a previous reading session
+      if (message.readingId !== undefined && message.readingId !== readingId) return false;
       if (message.chunkIndex !== undefined) {
         const nextIndex = message.chunkIndex + 1;
         if (nextIndex < totalChunks) {

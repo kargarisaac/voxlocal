@@ -13,6 +13,10 @@
   let chatServerUrl = 'http://localhost:8882';
   let isChatStreaming = false;
 
+  // Tab ↔ chat session persistence
+  const tabSessions = new Map(); // tabId → { sessionId, messagesHTML }
+  let currentTabId = null;
+
   // Configure marked for markdown rendering
   if (typeof marked !== 'undefined') {
     marked.setOptions({ breaks: true, gfm: true });
@@ -297,6 +301,29 @@
     }
   }
 
+  // ─── Tab Session Persistence ────────────────────────────────────────
+
+  function saveTabSession() {
+    if (currentTabId && chatSessionId) {
+      tabSessions.set(currentTabId, {
+        sessionId: chatSessionId,
+        messagesHTML: els.chatMessages.innerHTML
+      });
+    }
+  }
+
+  function restoreTabSession(tabId) {
+    const saved = tabSessions.get(tabId);
+    if (saved && saved.sessionId) {
+      chatSessionId = saved.sessionId;
+      els.chatMessages.innerHTML = saved.messagesHTML;
+      els.chatWelcome = $('chatWelcome');
+      els.sendBtn.disabled = false;
+      return true;
+    }
+    return false;
+  }
+
   // ─── Chat ─────────────────────────────────────────────────────────
 
   async function initChatSession() {
@@ -371,6 +398,8 @@
         chatSessionId = data.session_id;
         const label = result.source === 'pdf' ? 'PDF loaded' : 'Page loaded';
         els.chatWelcome.textContent = label + ': ' + (pageTitle || 'Untitled') + '. Ask anything about it.';
+        els.sendBtn.disabled = false;
+        saveTabSession();
       }
     } catch (e) {
       console.warn('Failed to init chat session:', e);
@@ -511,6 +540,7 @@
 
       // Add read-aloud button (only for the response, not thinking)
       addReadAloudButton(aiMsgEl, fullText);
+      saveTabSession();
 
     } catch (e) {
       aiMsgEl.classList.remove('streaming');
@@ -706,6 +736,7 @@
     els.chatMessages.innerHTML = '<div class="msg system" id="chatWelcome">Loading page context\u2026</div>';
     els.chatWelcome = $('chatWelcome');
     els.sendBtn.disabled = true;
+    if (currentTabId) tabSessions.delete(currentTabId);
   }
 
   // ─── Message Listener ─────────────────────────────────────────────
@@ -762,6 +793,10 @@
     // Load chat server URL from settings
     chatServerUrl = settings.chatServerUrl || 'http://localhost:8882';
 
+    // Track current tab
+    const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (tabs.length > 0) currentTabId = tabs[0].id;
+
     setupTTSListeners();
     setupChatListeners();
     setupMessageListener();
@@ -779,14 +814,31 @@
     });
   });
 
-  // Re-init chat when tab changes
-  chrome.tabs.onActivated.addListener(() => {
+  // Save/restore chat when switching tabs
+  chrome.tabs.onActivated.addListener((activeInfo) => {
+    saveTabSession();
+    currentTabId = activeInfo.tabId;
+
+    if (restoreTabSession(activeInfo.tabId)) {
+      // Restored previous chat for this tab
+      checkForPdf();
+      return;
+    }
+
+    // No saved session — init fresh
     chatSessionId = null;
     els.chatMessages.innerHTML = '<div class="msg system" id="chatWelcome">Open a page and start chatting about its content.</div>';
     els.chatWelcome = $('chatWelcome');
+    els.sendBtn.disabled = true;
+    checkForPdf();
     checkChatHealth().then(healthy => {
       if (healthy) initChatSession();
     });
+  });
+
+  // Clean up closed tabs
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    tabSessions.delete(tabId);
   });
 
 })();

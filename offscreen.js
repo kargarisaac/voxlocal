@@ -12,8 +12,9 @@
   let sourceConnected = false;
 
   // Audio chunk queue for gapless playback
-  let audioQueue = [];       // Array of { blob, chunkIndex }
+  let audioQueue = [];       // Array of { blob, chunkIndex, readingId }
   let isPlaying = false;
+  let currentReadingId = 0;
   let currentChunkIndex = -1;
 
   // ─── Audio Initialization ─────────────────────────────────────────
@@ -46,7 +47,7 @@
 
   // ─── Chunk Playback ───────────────────────────────────────────────
 
-  function playChunk(audioDataArray, mimeType, chunkIndex) {
+  function playChunk(audioDataArray, mimeType, chunkIndex, rId) {
     initAudio();
 
     const uint8 = new Uint8Array(audioDataArray);
@@ -54,6 +55,7 @@
     const url = URL.createObjectURL(blob);
 
     currentChunkIndex = chunkIndex;
+    currentReadingId = rId || 0;
 
     // Null out old handlers BEFORE changing src to prevent stale events
     audioElement.onplay = null;
@@ -85,9 +87,9 @@
       // Check if there's a queued chunk
       if (audioQueue.length > 0) {
         const next = audioQueue.shift();
-        playChunkFromBlob(next.blob, next.mimeType, next.chunkIndex);
+        playChunkFromBlob(next.blob, next.mimeType, next.chunkIndex, next.readingId);
       } else {
-        chrome.runtime.sendMessage({ type: 'chunkPlaybackEnded', chunkIndex: currentChunkIndex });
+        chrome.runtime.sendMessage({ type: 'chunkPlaybackEnded', chunkIndex: currentChunkIndex, readingId: currentReadingId });
       }
     };
 
@@ -121,10 +123,11 @@
     });
   }
 
-  function playChunkFromBlob(blob, mimeType, chunkIndex) {
+  function playChunkFromBlob(blob, mimeType, chunkIndex, rId) {
     initAudio();
 
     currentChunkIndex = chunkIndex;
+    currentReadingId = rId || currentReadingId;
     const url = URL.createObjectURL(blob);
 
     if (audioElement.src && audioElement.src.startsWith('blob:')) {
@@ -138,9 +141,9 @@
       isPlaying = false;
       if (audioQueue.length > 0) {
         const next = audioQueue.shift();
-        playChunkFromBlob(next.blob, next.mimeType, next.chunkIndex);
+        playChunkFromBlob(next.blob, next.mimeType, next.chunkIndex, next.readingId);
       } else {
-        chrome.runtime.sendMessage({ type: 'chunkPlaybackEnded', chunkIndex: currentChunkIndex });
+        chrome.runtime.sendMessage({ type: 'chunkPlaybackEnded', chunkIndex: currentChunkIndex, readingId: currentReadingId });
       }
     };
 
@@ -158,17 +161,17 @@
    * Queue a chunk for gapless playback.
    * If nothing is currently playing, play immediately.
    */
-  function queueChunk(audioDataArray, mimeType, chunkIndex) {
+  function queueChunk(audioDataArray, mimeType, chunkIndex, rId) {
     const uint8 = new Uint8Array(audioDataArray);
     const blob = new Blob([uint8], { type: mimeType || 'audio/mpeg' });
 
     if (!isPlaying && audioQueue.length === 0 &&
         (!audioElement || audioElement.paused || audioElement.ended)) {
       // Nothing playing, start immediately
-      playChunk(audioDataArray, mimeType, chunkIndex);
+      playChunk(audioDataArray, mimeType, chunkIndex, rId);
     } else {
       // Queue for gapless transition
-      audioQueue.push({ blob, mimeType, chunkIndex });
+      audioQueue.push({ blob, mimeType, chunkIndex, readingId: rId });
     }
   }
 
@@ -252,12 +255,12 @@
 
     switch (message.type) {
       case 'playAudioChunk':
-        playChunk(message.audioData, message.mimeType, message.chunkIndex);
+        playChunk(message.audioData, message.mimeType, message.chunkIndex, message.readingId);
         sendResponse({ ok: true });
         return false;
 
       case 'queueAudioChunk':
-        queueChunk(message.audioData, message.mimeType, message.chunkIndex);
+        queueChunk(message.audioData, message.mimeType, message.chunkIndex, message.readingId);
         sendResponse({ ok: true });
         return false;
 
