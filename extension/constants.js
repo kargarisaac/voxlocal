@@ -1,3 +1,6 @@
+/**
+ * Voxlocal — shared constants: default settings and TTS backend definitions.
+ */
 const DEFAULT_SETTINGS = {
   backend: 'kokoro',
   serverUrl: 'http://localhost:8880/v1/audio/speech',

@@ -18,7 +18,7 @@ services:
 
   kittentts:
     build:
-      context: ./kittentts-server
+      context: ./servers/kittentts
       dockerfile: Dockerfile
     container_name: kittentts
     restart: unless-stopped
@@ -33,7 +33,7 @@ services:
 
   chat-server:
     build:
-      context: ./chat-server
+      context: ./servers/chat
       dockerfile: Dockerfile
     container_name: voxlocal-chat
     restart: unless-stopped

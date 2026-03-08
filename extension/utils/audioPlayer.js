@@ -1,5 +1,5 @@
 /**
- * AudioPlayer - Popup-side abstraction for audio playback control.
+ * AudioPlayer - Side-panel abstraction for audio playback control.
  * Communicates with the background service worker.
  */
 class AudioPlayer {

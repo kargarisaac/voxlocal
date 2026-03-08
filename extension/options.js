@@ -1,5 +1,5 @@
 /**
- * Options page script for Local TTS Reader.
+ * Options page script for Voxlocal.
  */
 (function () {
   'use strict';

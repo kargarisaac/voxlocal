@@ -1,5 +1,5 @@
 /**
- * Offscreen document for Local TTS Reader.
+ * Offscreen document for Voxlocal.
  * Handles audio playback queue and PDF text extraction.
  * MV3 service workers cannot play audio, so this offscreen doc handles it.
  */
