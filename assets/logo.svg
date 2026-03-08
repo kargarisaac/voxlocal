@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
+  <!-- Background circle -->
+  <circle cx="60" cy="60" r="56" fill="#1a1d23" stroke="#2d3139" stroke-width="2"/>
+
+  <!-- Speaker body -->
+  <rect x="28" y="42" width="14" height="22" rx="2" fill="#e8475f"/>
+  <!-- Speaker cone -->
+  <polygon points="42,38 62,24 62,82 42,68" fill="#e8475f"/>
+
+  <!-- Sound waves -->
+  <path d="M68 38 Q78 50 68 62" fill="none" stroke="#e8475f" stroke-width="3.5" stroke-linecap="round" opacity="0.9"/>
+  <path d="M74 30 Q88 50 74 70" fill="none" stroke="#e8475f" stroke-width="3.5" stroke-linecap="round" opacity="0.6"/>
+
+  <!-- Chat bubble (bottom-right) -->
+  <rect x="70" y="68" width="30" height="22" rx="6" fill="#4a9eed"/>
+  <polygon points="76,90 72,98 82,90" fill="#4a9eed"/>
+  <!-- Chat dots -->
+  <circle cx="79" cy="79" r="2" fill="#1a1d23"/>
+  <circle cx="85" cy="79" r="2" fill="#1a1d23"/>
+  <circle cx="91" cy="79" r="2" fill="#1a1d23"/>
+</svg>

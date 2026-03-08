@@ -1,10 +1,27 @@
-# Voxlocal
+<p align="center">
+  <img src="assets/logo.svg" alt="Voxlocal logo" width="120" height="120">
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Chrome MV3](https://img.shields.io/badge/Chrome-MV3-brightgreen.svg)](https://developer.chrome.com/docs/extensions/develop/migrate/what-is-mv3)
-[![100% Local](https://img.shields.io/badge/runs-100%25%20local-orange.svg)](#)
+<h1 align="center">Voxlocal</h1>
 
-A Chrome extension that reads web pages, PDFs, and tweets aloud using locally running TTS servers, and lets you chat about page content with a local LLM. No cloud APIs, no data leaves your machine.
+<p align="center">
+  Read web pages aloud and chat about them with a local LLM.<br>
+  No cloud APIs. No data leaves your machine.
+</p>
+
+<p align="center">
+  <b>Read Aloud</b> &middot; <b>Chat with Pages</b> &middot; <b>Thinking Tokens</b> &middot; <b>PDF Support</b> &middot; <b>100% Local</b>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Chrome-MV3-brightgreen.svg" alt="Chrome MV3">
+  <img src="https://img.shields.io/badge/vanilla-JS-f7df1e.svg" alt="Vanilla JS">
+  <img src="https://img.shields.io/badge/Ollama-local-7c3aed.svg" alt="Ollama">
+  <img src="https://img.shields.io/badge/Docker-compose-2496ed.svg" alt="Docker">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="MIT License"></a>
+</p>
+
+---
 
 <!-- TODO: Add screenshot or demo GIF here -->
 
@@ -29,22 +46,39 @@ Browser read-aloud tools either send your content to external servers or sound r
 
 ### Architecture
 
-```
-Chrome Extension (MV3)
-  sidepanel.html/js .......... Combined TTS + Chat UI
-  background.js .............. Service worker: TTS orchestration, routing
-  content.js ................. Text extraction (Readability, Twitter, PDF detect)
-  offscreen.js ............... Audio playback + PDF.js text extraction
-        |                              |
-        | POST /v1/audio/speech        | POST /sessions, /chat (SSE)
-        |                              |
-  Kokoro / KittenTTS              Chat Server (FastAPI + httpx)
-  localhost:8880 / 8881           localhost:8882 (Docker)
-                                       |
-                                       | Ollama native /api/chat
-                                       |
-                                   Ollama (host)
-                                   localhost:11434
+```mermaid
+stateDiagram-v2
+    direction TB
+
+    state "Chrome Extension (MV3)" as ext {
+        direction LR
+        sidepanel: sidepanel.html/js\nTTS Controls + Chat UI
+        background: background.js\nService Worker
+        content: content.js\nText Extraction
+        offscreen: offscreen.js\nAudio Playback + PDF.js
+
+        sidepanel --> background: commands
+        background --> offscreen: audio chunks
+        content --> background: extracted text
+    }
+
+    state "TTS Servers (Docker)" as tts {
+        direction LR
+        kokoro: Kokoro‑FastAPI\nlocalhost:8880
+        kitten: KittenTTS\nlocalhost:8881
+    }
+
+    state "Chat Server (Docker)" as chat {
+        chatserver: FastAPI + httpx\nlocalhost:8882
+    }
+
+    state "LLM Runtime (Host)" as llm {
+        ollama: Ollama\nlocalhost:11434
+    }
+
+    background --> tts: POST /v1/audio/speech
+    background --> chatserver: POST /sessions, /chat (SSE)
+    chatserver --> ollama: POST /api/chat (streaming)
 ```
 
 ### Extension (Chrome MV3, vanilla JS)
