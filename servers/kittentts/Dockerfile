@@ -8,8 +8,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Create non-root user
-RUN useradd -m -s /bin/bash appuser
+# Create non-root user and ensure cache dir is writable
+RUN useradd -m -s /bin/bash appuser \
+    && mkdir -p /home/appuser/.cache/huggingface \
+    && chown -R appuser:appuser /home/appuser/.cache
 
 WORKDIR /app
 
