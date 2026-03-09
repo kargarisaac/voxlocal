@@ -194,6 +194,12 @@
 
   function stopPlayback() {
     if (audioElement) {
+      // Clear handlers BEFORE clearing src to prevent stale error events
+      audioElement.onplay = null;
+      audioElement.onpause = null;
+      audioElement.onended = null;
+      audioElement.ontimeupdate = null;
+      audioElement.onerror = null;
       audioElement.pause();
       audioElement.currentTime = 0;
       if (audioElement.src && audioElement.src.startsWith('blob:')) {
